@@ -54,45 +54,37 @@ deterministic.
 
 ### Formula Format
 
-Formulas are YAML files with `.formula.yaml` extension:
+Formulas are JSON files with `.formula.json` extension. JSON for consistency
+with beads (agents create/manage these; humans use visualizers):
 
-```yaml
-# shiny.formula.yaml
-formula: shiny
-description: Engineer in a Box - the canonical right way
-version: 1
-
-steps:
-  - id: design
-    description: Think carefully about architecture
-  - id: implement
-    needs: [design]
-  - id: review
-    needs: [implement]
-  - id: test
-    needs: [review]
-  - id: submit
-    needs: [test]
+```json
+{
+  "formula": "shiny",
+  "description": "Engineer in a Box - the canonical right way",
+  "version": 1,
+  "steps": [
+    {"id": "design", "description": "Think carefully about architecture"},
+    {"id": "implement", "needs": ["design"]},
+    {"id": "review", "needs": ["implement"]},
+    {"id": "test", "needs": ["review"]},
+    {"id": "submit", "needs": ["test"]}
+  ]
+}
 ```
 
 Formulas with composition:
 
-```yaml
-# shiny-enterprise.formula.yaml
-formula: shiny-enterprise
-extends: shiny
-version: 1
-
-compose:
-  - expand:
-      target: implement
-      with: rule-of-five
-  - aspect:
-      pointcut: "implement.*"
-      with: security-audit
-  - gate:
-      before: submit
-      condition: "security-postscan.approved"
+```json
+{
+  "formula": "shiny-enterprise",
+  "extends": "shiny",
+  "version": 1,
+  "compose": [
+    {"expand": {"target": "implement", "with": "rule-of-five"}},
+    {"aspect": {"pointcut": "implement.*", "with": "security-audit"}},
+    {"gate": {"before": "submit", "condition": "security-postscan.approved"}}
+  ]
+}
 ```
 
 ### CLI
