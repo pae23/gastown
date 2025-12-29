@@ -306,6 +306,10 @@ bd list --type=agent --json | jq '[.[] | select(.description | contains("role_ty
 
 **Step 4: Dispatch ready tasks to idle polecats**
 
+If ready tasks exist but NO idle polecats available:
+- Log: "Swarm <epic_id>: N ready tasks waiting, 0 idle polecats"
+- Skip dispatch this cycle (polecats will become idle after completing current work)
+
 For each ready task (up to number of idle polecats):
 ```bash
 gt sling <task-id> <rig>/<polecat-name>
