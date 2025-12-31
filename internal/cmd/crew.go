@@ -47,19 +47,20 @@ Commands:
 var crewAddCmd = &cobra.Command{
 	Use:   "add <name>",
 	Short: "Create a new crew workspace",
-	Long: `Create a new crew workspace with a clone of the rig repository.
+	Long: `Create new crew workspace(s) with a clone of the rig repository.
 
-The workspace is created at <rig>/crew/<name>/ with:
+Each workspace is created at <rig>/crew/<name>/ with:
 - A full git clone of the project repository
 - Mail directory for message delivery
 - CLAUDE.md with crew worker prompting
 - Optional feature branch (crew/<name>)
 
 Examples:
-  gt crew add dave                    # Create in current rig
+  gt crew add dave                       # Create single workspace
+  gt crew add murgen croaker goblin      # Create multiple at once
   gt crew add emma --rig greenplace      # Create in specific rig
-  gt crew add fred --branch           # Create with feature branch`,
-	Args: cobra.ExactArgs(1),
+  gt crew add fred --branch              # Create with feature branch`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: runCrewAdd,
 }
 
