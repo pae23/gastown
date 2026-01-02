@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/style"
@@ -238,6 +243,31 @@ Examples:
 	RunE: runMailReply,
 }
 
+var mailClaimCmd = &cobra.Command{
+	Use:   "claim <queue-name>",
+	Short: "Claim a message from a queue",
+	Long: `Claim the oldest unclaimed message from a work queue.
+
+SYNTAX:
+  gt mail claim <queue-name>
+
+BEHAVIOR:
+1. List unclaimed messages in the queue
+2. Pick the oldest unclaimed message
+3. Set assignee to caller identity
+4. Set status to in_progress
+5. Print claimed message details
+
+ELIGIBILITY:
+The caller must match a pattern in the queue's workers list
+(defined in ~/gt/config/messaging.json).
+
+Examples:
+  gt mail claim work/gastown    # Claim from gastown work queue`,
+	Args: cobra.ExactArgs(1),
+	RunE: runMailClaim,
+}
+
 func init() {
 	// Send flags
 	mailSendCmd.Flags().StringVarP(&mailSubject, "subject", "s", "", "Message subject (required)")
@@ -287,6 +317,7 @@ func init() {
 	mailCmd.AddCommand(mailCheckCmd)
 	mailCmd.AddCommand(mailThreadCmd)
 	mailCmd.AddCommand(mailReplyCmd)
+	mailCmd.AddCommand(mailClaimCmd)
 
 	rootCmd.AddCommand(mailCmd)
 }
@@ -1065,4 +1096,232 @@ func generateThreadID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b) // crypto/rand.Read only fails on broken system
 	return "thread-" + hex.EncodeToString(b)
+}
+
+// runMailClaim claims the oldest unclaimed message from a work queue.
+func runMailClaim(cmd *cobra.Command, args []string) error {
+	queueName := args[0]
+
+	// Find workspace
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	// Load queue config from messaging.json
+	configPath := config.MessagingConfigPath(townRoot)
+	cfg, err := config.LoadMessagingConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("loading messaging config: %w", err)
+	}
+
+	queueCfg, ok := cfg.Queues[queueName]
+	if !ok {
+		return fmt.Errorf("unknown queue: %s", queueName)
+	}
+
+	// Get caller identity
+	caller := detectSender()
+
+	// Check if caller is eligible (matches any pattern in workers list)
+	if !isEligibleWorker(caller, queueCfg.Workers) {
+		return fmt.Errorf("not eligible to claim from queue %s (caller: %s, workers: %v)",
+			queueName, caller, queueCfg.Workers)
+	}
+
+	// List unclaimed messages in the queue
+	// Queue messages have assignee=queue:<name> and status=open
+	queueAssignee := "queue:" + queueName
+	messages, err := listQueueMessages(townRoot, queueAssignee)
+	if err != nil {
+		return fmt.Errorf("listing queue messages: %w", err)
+	}
+
+	if len(messages) == 0 {
+		fmt.Printf("%s No messages to claim in queue %s\n", style.Dim.Render("○"), queueName)
+		return nil
+	}
+
+	// Pick the oldest unclaimed message (first in list, sorted by created)
+	oldest := messages[0]
+
+	// Claim the message: set assignee to caller and status to in_progress
+	if err := claimMessage(townRoot, oldest.ID, caller); err != nil {
+		return fmt.Errorf("claiming message: %w", err)
+	}
+
+	// Print claimed message details
+	fmt.Printf("%s Claimed message from queue %s\n", style.Bold.Render("✓"), queueName)
+	fmt.Printf("  ID: %s\n", oldest.ID)
+	fmt.Printf("  Subject: %s\n", oldest.Title)
+	if oldest.Description != "" {
+		// Show first line of description
+		lines := strings.SplitN(oldest.Description, "\n", 2)
+		preview := lines[0]
+		if len(preview) > 80 {
+			preview = preview[:77] + "..."
+		}
+		fmt.Printf("  Preview: %s\n", style.Dim.Render(preview))
+	}
+	fmt.Printf("  From: %s\n", oldest.From)
+	fmt.Printf("  Created: %s\n", oldest.Created.Format("2006-01-02 15:04"))
+
+	return nil
+}
+
+// queueMessage represents a message in a queue.
+type queueMessage struct {
+	ID          string
+	Title       string
+	Description string
+	From        string
+	Created     time.Time
+	Priority    int
+}
+
+// isEligibleWorker checks if the caller matches any pattern in the workers list.
+// Patterns support wildcards: "gastown/polecats/*" matches "gastown/polecats/capable".
+func isEligibleWorker(caller string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matchWorkerPattern(pattern, caller) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchWorkerPattern checks if caller matches the pattern.
+// Supports simple wildcards: * matches a single path segment (no slashes).
+func matchWorkerPattern(pattern, caller string) bool {
+	// Handle exact match
+	if pattern == caller {
+		return true
+	}
+
+	// Handle wildcard patterns
+	if strings.Contains(pattern, "*") {
+		// Convert to simple glob matching
+		// "gastown/polecats/*" should match "gastown/polecats/capable"
+		// but NOT "gastown/polecats/sub/capable"
+		parts := strings.Split(pattern, "*")
+		if len(parts) == 2 {
+			prefix := parts[0]
+			suffix := parts[1]
+			if strings.HasPrefix(caller, prefix) && strings.HasSuffix(caller, suffix) {
+				// Check that the middle part doesn't contain path separators
+				middle := caller[len(prefix) : len(caller)-len(suffix)]
+				if !strings.Contains(middle, "/") {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// listQueueMessages lists unclaimed messages in a queue.
+func listQueueMessages(townRoot, queueAssignee string) ([]queueMessage, error) {
+	// Use bd list to find messages with assignee=queue:<name> and status=open
+	beadsDir := filepath.Join(townRoot, ".beads")
+
+	args := []string{"list",
+		"--assignee", queueAssignee,
+		"--status", "open",
+		"--type", "message",
+		"--sort", "created",
+		"--limit", "0", // No limit
+		"--json",
+	}
+
+	cmd := exec.Command("bd", args...)
+	cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+		return nil, err
+	}
+
+	// Parse JSON output
+	var issues []struct {
+		ID          string    `json:"id"`
+		Title       string    `json:"title"`
+		Description string    `json:"description"`
+		Labels      []string  `json:"labels"`
+		CreatedAt   time.Time `json:"created_at"`
+		Priority    int       `json:"priority"`
+	}
+
+	if err := json.Unmarshal(stdout.Bytes(), &issues); err != nil {
+		// If no messages, bd might output empty or error
+		if strings.TrimSpace(stdout.String()) == "" || strings.TrimSpace(stdout.String()) == "[]" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("parsing bd output: %w", err)
+	}
+
+	// Convert to queueMessage, extracting 'from' from labels
+	var messages []queueMessage
+	for _, issue := range issues {
+		msg := queueMessage{
+			ID:          issue.ID,
+			Title:       issue.Title,
+			Description: issue.Description,
+			Created:     issue.CreatedAt,
+			Priority:    issue.Priority,
+		}
+
+		// Extract 'from' from labels (format: "from:address")
+		for _, label := range issue.Labels {
+			if strings.HasPrefix(label, "from:") {
+				msg.From = strings.TrimPrefix(label, "from:")
+				break
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+
+	// Sort by created time (oldest first)
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Created.Before(messages[j].Created)
+	})
+
+	return messages, nil
+}
+
+// claimMessage claims a message by setting assignee and status.
+func claimMessage(townRoot, messageID, claimant string) error {
+	beadsDir := filepath.Join(townRoot, ".beads")
+
+	args := []string{"update", messageID,
+		"--assignee", claimant,
+		"--status", "in_progress",
+	}
+
+	cmd := exec.Command("bd", args...)
+	cmd.Env = append(os.Environ(),
+		"BEADS_DIR="+beadsDir,
+		"BD_ACTOR="+claimant,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return fmt.Errorf("%s", errMsg)
+		}
+		return err
+	}
+
+	return nil
 }
