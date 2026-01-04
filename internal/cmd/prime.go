@@ -1245,14 +1245,14 @@ func getAgentFields(ctx RoleContext, state string) *beads.AgentFields {
 }
 
 // getAgentBeadID returns the agent bead ID for the current role.
-// Rig-scoped agents use the rig's configured prefix; town agents remain gt-.
+// Town-level agents (mayor, deacon) use hq- prefix; rig-scoped agents use the rig's prefix.
 // Returns empty string for unknown roles.
 func getAgentBeadID(ctx RoleContext) string {
 	switch ctx.Role {
 	case RoleMayor:
-		return beads.MayorBeadID()
+		return beads.MayorBeadIDTown()
 	case RoleDeacon:
-		return beads.DeaconBeadID()
+		return beads.DeaconBeadIDTown()
 	case RoleWitness:
 		if ctx.Rig != "" {
 			prefix := beads.GetPrefixForRig(ctx.TownRoot, ctx.Rig)
