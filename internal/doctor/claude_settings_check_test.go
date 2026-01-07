@@ -1016,3 +1016,69 @@ func TestClaudeSettingsCheck_FixMovesCLAUDEmdToMayor(t *testing.T) {
 		t.Error("expected CLAUDE.md to be created at mayor/")
 	}
 }
+
+func TestClaudeSettingsCheck_TownRootSettingsWarnsInsteadOfKilling(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create mayor directory (needed for fix to recreate settings there)
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create settings.json at town root (wrong location - pollutes all agents)
+	staleTownRootDir := filepath.Join(tmpDir, ".claude")
+	if err := os.MkdirAll(staleTownRootDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	staleTownRootSettings := filepath.Join(staleTownRootDir, "settings.json")
+	// Create valid settings content
+	settingsContent := `{
+		"env": {"PATH": "/usr/bin"},
+		"enabledPlugins": ["claude-code-expert"],
+		"hooks": {
+			"SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "gt prime"}]}],
+			"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "gt handoff"}]}]
+		}
+	}`
+	if err := os.WriteFile(staleTownRootSettings, []byte(settingsContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	check := NewClaudeSettingsCheck()
+	ctx := &CheckContext{TownRoot: tmpDir}
+
+	// Run to detect
+	result := check.Run(ctx)
+	if result.Status != StatusError {
+		t.Fatalf("expected StatusError for town root settings, got %v", result.Status)
+	}
+
+	// Verify it's flagged as wrong location
+	foundWrongLocation := false
+	for _, d := range result.Details {
+		if strings.Contains(d, "wrong location") {
+			foundWrongLocation = true
+			break
+		}
+	}
+	if !foundWrongLocation {
+		t.Errorf("expected details to mention wrong location, got %v", result.Details)
+	}
+
+	// Apply fix - should NOT return error and should NOT kill sessions
+	// (session killing would require tmux which isn't available in tests)
+	if err := check.Fix(ctx); err != nil {
+		t.Fatalf("Fix failed: %v", err)
+	}
+
+	// Verify stale file was deleted
+	if _, err := os.Stat(staleTownRootSettings); !os.IsNotExist(err) {
+		t.Error("expected settings.json at town root to be deleted")
+	}
+
+	// Verify .claude directory was cleaned up (best-effort)
+	if _, err := os.Stat(staleTownRootDir); !os.IsNotExist(err) {
+		t.Error("expected .claude directory at town root to be deleted")
+	}
+}

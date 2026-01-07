@@ -10,6 +10,7 @@ import (
 
 	"github.com/steveyegge/gastown/internal/claude"
 	"github.com/steveyegge/gastown/internal/session"
+	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/templates"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
@@ -477,14 +478,11 @@ func (c *ClaudeSettingsCheck) Fix(ctx *CheckContext) error {
 			}
 
 			// Town-root files were inherited by ALL agents via directory traversal.
-			// Cycle all Gas Town sessions so they pick up the corrected file locations.
-			// This includes gt-* (rig agents) and hq-* (mayor, deacon).
-			sessions, _ := t.ListSessions()
-			for _, sess := range sessions {
-				if strings.HasPrefix(sess, session.Prefix) || strings.HasPrefix(sess, session.HQPrefix) {
-					_ = t.KillSession(sess)
-				}
-			}
+			// Warn user to restart agents - don't auto-kill sessions as that's too disruptive,
+			// especially since deacon runs gt doctor automatically which would create a loop.
+			// Settings are only read at startup, so running agents already have config loaded.
+			fmt.Printf("\n  %s Town-root settings were moved. Restart agents to pick up new config:\n", style.Warning.Render("⚠"))
+			fmt.Printf("      gt up --restart\n\n")
 			continue
 		}
 
