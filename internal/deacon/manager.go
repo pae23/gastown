@@ -108,9 +108,15 @@ func (m *Manager) Start(agentOverride string) error {
 	theme := tmux.DeaconTheme()
 	_ = t.ConfigureGasTownSession(sessionID, theme, "", "Deacon", "health-check")
 
-	// Wait for Claude to start (non-fatal)
+	// Wait for Claude to start and verify it's actually running
 	if err := t.WaitForCommand(sessionID, constants.SupportedShells, constants.ClaudeStartTimeout); err != nil {
-		// Non-fatal - try to continue anyway
+		// Timeout waiting for shell to exit - Claude may have failed to start
+		fmt.Printf("Warning: timeout waiting for Claude to start: %v\n", err)
+	}
+	// Explicitly verify Claude is running (not just "not a shell")
+	if !t.IsClaudeRunning(sessionID) {
+		// Claude didn't start properly - this is a problem but daemon will retry
+		fmt.Println("Warning: Claude does not appear to be running after startup")
 	}
 
 	// Accept bypass permissions warning dialog if it appears.

@@ -385,9 +385,15 @@ func startDeaconSession(t *tmux.Tmux, sessionName, agentOverride string) error {
 		return fmt.Errorf("sending command: %w", err)
 	}
 
-	// Wait for Claude to start (non-fatal)
+	// Wait for Claude to start and verify it's actually running
 	if err := t.WaitForCommand(sessionName, constants.SupportedShells, constants.ClaudeStartTimeout); err != nil {
-		// Non-fatal
+		// Timeout waiting for shell to exit - Claude may have failed to start
+		style.PrintWarning("Timeout waiting for Claude to start: %v", err)
+	}
+	// Explicitly verify Claude is running (not just "not a shell")
+	if !t.IsClaudeRunning(sessionName) {
+		// Claude didn't start properly - warn but continue (daemon will handle retries)
+		style.PrintWarning("Claude does not appear to be running after startup")
 	}
 	time.Sleep(constants.ShutdownNotifyDelay)
 
