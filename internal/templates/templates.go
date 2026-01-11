@@ -162,6 +162,34 @@ func CreateMayorCLAUDEmd(mayorDir, townRoot, townName, mayorSession, deaconSessi
 	return os.WriteFile(claudePath, []byte(content), 0644)
 }
 
+// CreatePolecatCLAUDEmd creates a CLAUDE.md file for a polecat at the specified worktree.
+// This provides the polecat with Gas Town context at spawn time, so it knows its role
+// and responsibilities even before the SessionStart hook runs.
+func CreatePolecatCLAUDEmd(worktreeDir, polecatName, rigName, townRoot, defaultBranch, issuePrefix string) error {
+	tmpl, err := New()
+	if err != nil {
+		return err
+	}
+
+	data := RoleData{
+		Role:          "polecat",
+		RigName:       rigName,
+		TownRoot:      townRoot,
+		WorkDir:       worktreeDir,
+		DefaultBranch: defaultBranch,
+		Polecat:       polecatName,
+		IssuePrefix:   issuePrefix,
+	}
+
+	content, err := tmpl.RenderRole("polecat", data)
+	if err != nil {
+		return err
+	}
+
+	claudePath := filepath.Join(worktreeDir, "CLAUDE.md")
+	return os.WriteFile(claudePath, []byte(content), 0644)
+}
+
 // GetAllRoleTemplates returns all role templates as a map of filename to content.
 func GetAllRoleTemplates() (map[string][]byte, error) {
 	entries, err := templateFS.ReadDir("roles")

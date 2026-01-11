@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/rig"
+	"github.com/steveyegge/gastown/internal/templates"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
@@ -276,10 +277,14 @@ func (m *Manager) AddWithOptions(name string, opts AddOptions) (*Polecat, error)
 		return nil, fmt.Errorf("creating worktree from %s: %w", startPoint, err)
 	}
 
-	// NOTE: We intentionally do NOT write to CLAUDE.md here.
-	// Gas Town context is injected ephemerally via SessionStart hook (gt prime).
-	// Writing to CLAUDE.md would overwrite project instructions and could leak
-	// Gas Town internals into the project repo if merged.
+	// Inject CLAUDE.md from template so the polecat has Gas Town context at spawn time.
+	// This ensures the agent knows its role even before SessionStart hook runs.
+	townRoot, _ := workspace.Find(m.rig.Path)
+	issuePrefix := beads.GetPrefixForRig(townRoot, m.rig.Name)
+	if err := templates.CreatePolecatCLAUDEmd(clonePath, name, m.rig.Name, townRoot, defaultBranch, issuePrefix); err != nil {
+		// Non-fatal - polecat can still work via SessionStart hook
+		fmt.Printf("Warning: could not create CLAUDE.md: %v\n", err)
+	}
 
 	// Set up shared beads: polecat uses rig's .beads via redirect file.
 	// This eliminates git sync overhead - all polecats share one database.
@@ -548,8 +553,12 @@ func (m *Manager) RepairWorktreeWithOptions(name string, force bool, opts AddOpt
 		return nil, fmt.Errorf("creating fresh worktree from %s: %w", startPoint, err)
 	}
 
-	// NOTE: We intentionally do NOT write to CLAUDE.md here.
-	// Gas Town context is injected ephemerally via SessionStart hook (gt prime).
+	// Inject CLAUDE.md from template so the polecat has Gas Town context at spawn time.
+	townRoot, _ := workspace.Find(m.rig.Path)
+	issuePrefix := beads.GetPrefixForRig(townRoot, m.rig.Name)
+	if err := templates.CreatePolecatCLAUDEmd(newClonePath, name, m.rig.Name, townRoot, defaultBranch, issuePrefix); err != nil {
+		fmt.Printf("Warning: could not create CLAUDE.md: %v\n", err)
+	}
 
 	// Set up shared beads
 	if err := m.setupSharedBeads(newClonePath); err != nil {
@@ -1155,6 +1164,13 @@ func (m *Manager) RefreshForReuse(name string, opts AddOptions) (*Polecat, error
 			// Non-fatal: warn but continue
 			fmt.Printf("Warning: could not set hook bead: %v\n", err)
 		}
+	}
+
+	// Refresh CLAUDE.md from template to ensure context is up to date
+	townRoot, _ := workspace.Find(m.rig.Path)
+	issuePrefix := beads.GetPrefixForRig(townRoot, m.rig.Name)
+	if err := templates.CreatePolecatCLAUDEmd(clonePath, name, m.rig.Name, townRoot, defaultBranch, issuePrefix); err != nil {
+		fmt.Printf("Warning: could not refresh CLAUDE.md: %v\n", err)
 	}
 
 	// Copy overlay files (in case they've been updated)
