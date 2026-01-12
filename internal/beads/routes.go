@@ -247,3 +247,30 @@ func ResolveHookDir(townRoot, beadID, hookWorkDir string) string {
 	}
 	return townRoot
 }
+
+// ShowWithRouting fetches an issue by ID, using routes.jsonl to resolve the
+// correct rig based on the issue ID prefix. This enables cross-rig lookups
+// from the town root.
+//
+// For example, if townRoot has routes:
+//   - hq- -> .
+//   - gt- -> gastown/mayor/rig
+//   - tr- -> testrig/mayor/rig
+//
+// Then ShowWithRouting(townRoot, "gt-abc") will resolve to gastown/mayor/rig
+// and fetch the issue from that rig's beads database.
+//
+// Returns ErrNotFound if the prefix is not in routes or the issue doesn't exist.
+func ShowWithRouting(townRoot, id string) (*Issue, error) {
+	prefix := ExtractPrefix(id)
+	if prefix == "" {
+		return nil, fmt.Errorf("invalid bead ID (no prefix): %s", id)
+	}
+
+	rigPath := GetRigPathForPrefix(townRoot, prefix)
+	if rigPath == "" {
+		return nil, fmt.Errorf("unknown prefix %q: not found in routes.jsonl", prefix)
+	}
+
+	return New(rigPath).Show(id)
+}

@@ -158,6 +158,7 @@ func TestBeadsRoutingFromTownRoot(t *testing.T) {
 
 	townRoot := setupRoutingTestTown(t)
 
+	// Initialize beads databases BEFORE writing routes (bd init may write to routes.jsonl)
 	initBeadsDBWithPrefix(t, townRoot, "hq")
 
 	gastownRigPath := filepath.Join(townRoot, "gastown", "mayor", "rig")
@@ -169,6 +170,17 @@ func TestBeadsRoutingFromTownRoot(t *testing.T) {
 	gastownIssue := createTestIssue(t, gastownRigPath, "Gastown routing test")
 	testrigIssue := createTestIssue(t, testrigRigPath, "Testrig routing test")
 
+	// Write routes AFTER all bd operations (bd init and create overwrite routes.jsonl)
+	townBeadsDir := filepath.Join(townRoot, ".beads")
+	routes := []beads.Route{
+		{Prefix: "hq-", Path: "."},
+		{Prefix: "gt-", Path: "gastown/mayor/rig"},
+		{Prefix: "tr-", Path: "testrig/mayor/rig"},
+	}
+	if err := beads.WriteRoutes(townBeadsDir, routes); err != nil {
+		t.Fatalf("write routes after bd operations: %v", err)
+	}
+
 	tests := []struct {
 		id    string
 		title string
@@ -178,10 +190,10 @@ func TestBeadsRoutingFromTownRoot(t *testing.T) {
 		{testrigIssue.ID, testrigIssue.Title},
 	}
 
-	townBeads := beads.New(townRoot)
 	for _, tc := range tests {
 		t.Run(tc.id, func(t *testing.T) {
-			issue, err := townBeads.Show(tc.id)
+			// Use ShowWithRouting to resolve the correct rig based on prefix
+			issue, err := beads.ShowWithRouting(townRoot, tc.id)
 			if err != nil {
 				t.Fatalf("bd show %s failed: %v", tc.id, err)
 			}
