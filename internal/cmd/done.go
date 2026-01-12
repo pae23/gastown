@@ -119,6 +119,35 @@ func runDone(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("getting current branch: %w", err)
 	}
 
+	// Auto-detect cleanup status if not explicitly provided
+	// This prevents premature polecat cleanup by ensuring witness knows git state
+	if doneCleanupStatus == "" {
+		workStatus, err := g.CheckUncommittedWork()
+		if err != nil {
+			style.PrintWarning("could not auto-detect cleanup status: %v", err)
+		} else {
+			switch {
+			case workStatus.HasUncommittedChanges:
+				doneCleanupStatus = "uncommitted"
+			case workStatus.StashCount > 0:
+				doneCleanupStatus = "stash"
+			default:
+				// CheckUncommittedWork.UnpushedCommits doesn't work for branches
+				// without upstream tracking (common for polecats). Use the more
+				// robust BranchPushedToRemote which compares against origin/main.
+				pushed, unpushedCount, err := g.BranchPushedToRemote(branch, "origin")
+				if err != nil {
+					style.PrintWarning("could not check if branch is pushed: %v", err)
+					doneCleanupStatus = "unpushed" // err on side of caution
+				} else if !pushed || unpushedCount > 0 {
+					doneCleanupStatus = "unpushed"
+				} else {
+					doneCleanupStatus = "clean"
+				}
+			}
+		}
+	}
+
 	// Parse branch info
 	info := parseBranchName(branch)
 
