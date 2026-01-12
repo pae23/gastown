@@ -170,7 +170,10 @@ func (m *Manager) repoBase() (*git.Git, error) {
 	bareRepoPath := filepath.Join(m.rig.Path, ".repo.git")
 	if info, err := os.Stat(bareRepoPath); err == nil && info.IsDir() {
 		// Bare repo exists - use it
-		return git.NewGitWithDir(bareRepoPath, ""), nil
+		// Set workDir to rig root so git commands run in a neutral context,
+		// not from the current working directory which might be in a different rig's worktree.
+		// This prevents git from using the wrong repository when creating worktrees.
+		return git.NewGitWithDir(bareRepoPath, m.rig.Path), nil
 	}
 
 	// Fall back to mayor/rig (legacy architecture)
