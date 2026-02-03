@@ -339,6 +339,16 @@ func runDegradedTriage(b *boot.Boot) (action, target string, err error) {
 
 			// Has work on hook - check if it's actually progressing
 			// by looking at when the last molecule step was closed.
+			//
+			// But first: if deacon is in backoff mode (await-signal), skip
+			// this check. The idle:N label indicates the deacon is legitimately
+			// waiting for signals, not stuck.
+			if isDeaconInBackoff() {
+				// Deacon is in await-signal with backoff - this is expected.
+				// Don't interrupt; it will wake on beads activity.
+				return "nothing", "", nil
+			}
+
 			lastActivity, err := getMoleculeLastActivity(hookBead)
 			if err == nil && !lastActivity.IsZero() && time.Since(lastActivity) > 15*time.Minute {
 				fmt.Printf("Deacon has hooked work but no progress in %s - nudging\n", time.Since(lastActivity).Round(time.Minute))
