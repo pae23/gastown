@@ -216,6 +216,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// Migration readiness checks
 	d.Register(doctor.NewMigrationReadinessCheck())
 	d.Register(doctor.NewUnmigratedRigCheck())
+	d.Register(doctor.NewDoltMetadataCheck())
 
 	// Rig-specific checks (only when --rig is specified)
 	if doctorRig != "" {

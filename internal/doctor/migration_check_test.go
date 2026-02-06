@@ -178,6 +178,192 @@ func TestUnmigratedRigCheck_SQLiteDetected(t *testing.T) {
 	}
 }
 
+func TestDoltMetadataCheck_NoDoltData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// No .dolt-data directory = dolt not in use
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(`{"rigs":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &CheckContext{TownRoot: tmpDir}
+	check := NewDoltMetadataCheck()
+	result := check.Run(ctx)
+
+	if result.Status != StatusOK {
+		t.Errorf("Expected StatusOK when no dolt data dir, got %v: %s", result.Status, result.Message)
+	}
+}
+
+func TestDoltMetadataCheck_MissingMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create .dolt-data/hq (dolt is in use)
+	doltDataDir := filepath.Join(tmpDir, ".dolt-data", "hq", ".dolt")
+	if err := os.MkdirAll(doltDataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .beads directory WITHOUT dolt metadata
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"),
+		[]byte(`{"database": "beads.db"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(`{"rigs":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &CheckContext{TownRoot: tmpDir}
+	check := NewDoltMetadataCheck()
+	result := check.Run(ctx)
+
+	if result.Status != StatusWarning {
+		t.Errorf("Expected StatusWarning for missing dolt metadata, got %v: %s", result.Status, result.Message)
+	}
+}
+
+func TestDoltMetadataCheck_CorrectMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create .dolt-data/hq
+	doltDataDir := filepath.Join(tmpDir, ".dolt-data", "hq", ".dolt")
+	if err := os.MkdirAll(doltDataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .beads directory WITH correct dolt metadata
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"database":"dolt","backend":"dolt","dolt_mode":"server","dolt_database":"hq"}`
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(metadata), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(`{"rigs":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &CheckContext{TownRoot: tmpDir}
+	check := NewDoltMetadataCheck()
+	result := check.Run(ctx)
+
+	if result.Status != StatusOK {
+		t.Errorf("Expected StatusOK for correct dolt metadata, got %v: %s", result.Status, result.Message)
+	}
+}
+
+func TestDoltMetadataCheck_FixWritesMetadata(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create .dolt-data/hq
+	doltDataDir := filepath.Join(tmpDir, ".dolt-data", "hq", ".dolt")
+	if err := os.MkdirAll(doltDataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .beads directory without dolt metadata
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"),
+		[]byte(`{"database": "beads.db"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(`{"rigs":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &CheckContext{TownRoot: tmpDir}
+	check := NewDoltMetadataCheck()
+
+	// Run to detect missing metadata
+	result := check.Run(ctx)
+	if result.Status != StatusWarning {
+		t.Fatalf("Expected StatusWarning, got %v", result.Status)
+	}
+
+	// Fix should write dolt metadata
+	if err := check.Fix(ctx); err != nil {
+		t.Fatalf("Fix failed: %v", err)
+	}
+
+	// Run again to verify fix
+	result = check.Run(ctx)
+	if result.Status != StatusOK {
+		t.Errorf("Expected StatusOK after fix, got %v: %s", result.Status, result.Message)
+	}
+}
+
+func TestDoltMetadataCheck_RigWithMayorBeads(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create .dolt-data/myrig
+	doltDataDir := filepath.Join(tmpDir, ".dolt-data", "myrig", ".dolt")
+	if err := os.MkdirAll(doltDataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create rig with mayor/rig/.beads (no metadata)
+	mayorBeads := filepath.Join(tmpDir, "myrig", "mayor", "rig", ".beads")
+	if err := os.MkdirAll(mayorBeads, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rigs.json lists "myrig"
+	mayorDir := filepath.Join(tmpDir, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rigsJSON := `{"rigs":{"myrig":{}}}`
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(rigsJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := &CheckContext{TownRoot: tmpDir}
+	check := NewDoltMetadataCheck()
+	result := check.Run(ctx)
+
+	if result.Status != StatusWarning {
+		t.Errorf("Expected StatusWarning for rig without metadata, got %v: %s", result.Status, result.Message)
+	}
+
+	// Fix it
+	if err := check.Fix(ctx); err != nil {
+		t.Fatalf("Fix failed: %v", err)
+	}
+
+	// Verify fix wrote to mayor/rig/.beads/metadata.json
+	result = check.Run(ctx)
+	if result.Status != StatusOK {
+		t.Errorf("Expected StatusOK after fix, got %v: %s", result.Status, result.Message)
+	}
+}
+
 func TestBdSupportsDolt(t *testing.T) {
 	check := &MigrationReadinessCheck{}
 

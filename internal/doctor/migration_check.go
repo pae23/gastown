@@ -354,3 +354,225 @@ func (c *UnmigratedRigCheck) loadRigs(rigsPath string) map[string]struct{} {
 	}
 	return rigs
 }
+
+// DoltMetadataCheck verifies that all rig .beads/metadata.json files have
+// proper Dolt server configuration (backend, dolt_mode, dolt_database).
+// Missing or incomplete metadata causes the split-brain problem where bd
+// opens isolated local databases instead of the centralized Dolt server.
+type DoltMetadataCheck struct {
+	FixableCheck
+	missingMetadata []string // Cached during Run for use in Fix
+}
+
+// NewDoltMetadataCheck creates a new dolt metadata check.
+func NewDoltMetadataCheck() *DoltMetadataCheck {
+	return &DoltMetadataCheck{
+		FixableCheck: FixableCheck{
+			BaseCheck: BaseCheck{
+				CheckName:        "dolt-metadata",
+				CheckDescription: "Check that metadata.json has Dolt server config",
+				CheckCategory:    CategoryConfig,
+			},
+		},
+	}
+}
+
+// Run checks if all rig metadata.json files have dolt server config.
+func (c *DoltMetadataCheck) Run(ctx *CheckContext) *CheckResult {
+	c.missingMetadata = nil
+
+	// Check if dolt data directory exists (no point checking if dolt isn't in use)
+	doltDataDir := filepath.Join(ctx.TownRoot, ".dolt-data")
+	if _, err := os.Stat(doltDataDir); os.IsNotExist(err) {
+		return &CheckResult{
+			Name:     c.Name(),
+			Status:   StatusOK,
+			Message:  "No Dolt data directory (dolt not in use)",
+			Category: c.CheckCategory,
+		}
+	}
+
+	var missing []string
+	var ok int
+
+	// Check town-level beads (hq database)
+	townBeadsDir := filepath.Join(ctx.TownRoot, ".beads")
+	if _, err := os.Stat(filepath.Join(doltDataDir, "hq")); err == nil {
+		if !c.hasDoltMetadata(townBeadsDir, "hq") {
+			missing = append(missing, "hq (town root .beads/)")
+			c.missingMetadata = append(c.missingMetadata, "hq")
+		} else {
+			ok++
+		}
+	}
+
+	// Check rig-level beads
+	rigsPath := filepath.Join(ctx.TownRoot, "mayor", "rigs.json")
+	rigs := c.loadRigs(rigsPath)
+	for rigName := range rigs {
+		// Only check rigs that have a dolt database
+		if _, err := os.Stat(filepath.Join(doltDataDir, rigName)); os.IsNotExist(err) {
+			continue
+		}
+
+		beadsDir := c.findRigBeadsDir(ctx.TownRoot, rigName)
+		if beadsDir == "" {
+			missing = append(missing, rigName+" (no .beads directory)")
+			c.missingMetadata = append(c.missingMetadata, rigName)
+			continue
+		}
+
+		if !c.hasDoltMetadata(beadsDir, rigName) {
+			relPath, _ := filepath.Rel(ctx.TownRoot, beadsDir)
+			missing = append(missing, rigName+" ("+relPath+")")
+			c.missingMetadata = append(c.missingMetadata, rigName)
+		} else {
+			ok++
+		}
+	}
+
+	if len(missing) == 0 {
+		return &CheckResult{
+			Name:     c.Name(),
+			Status:   StatusOK,
+			Message:  fmt.Sprintf("All %d rig(s) have Dolt server metadata", ok),
+			Category: c.CheckCategory,
+		}
+	}
+
+	details := make([]string, len(missing))
+	for i, m := range missing {
+		details[i] = "Missing dolt config: " + m
+	}
+
+	return &CheckResult{
+		Name:     c.Name(),
+		Status:   StatusWarning,
+		Message:  fmt.Sprintf("%d rig(s) missing Dolt server metadata", len(missing)),
+		Details:  details,
+		FixHint:  "Run 'gt dolt fix-metadata' to update all metadata.json files",
+		Category: c.CheckCategory,
+	}
+}
+
+// Fix updates metadata.json for all rigs with missing dolt config.
+func (c *DoltMetadataCheck) Fix(ctx *CheckContext) error {
+	if len(c.missingMetadata) == 0 {
+		return nil
+	}
+
+	// Import doltserver package via the fix path
+	for _, rigName := range c.missingMetadata {
+		if err := c.writeDoltMetadata(ctx.TownRoot, rigName); err != nil {
+			return fmt.Errorf("fixing %s: %w", rigName, err)
+		}
+	}
+
+	return nil
+}
+
+// hasDoltMetadata checks if a beads directory has proper dolt server config.
+func (c *DoltMetadataCheck) hasDoltMetadata(beadsDir, expectedDB string) bool {
+	metadataPath := filepath.Join(beadsDir, "metadata.json")
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return false
+	}
+
+	var metadata struct {
+		Backend      string `json:"backend"`
+		DoltMode     string `json:"dolt_mode"`
+		DoltDatabase string `json:"dolt_database"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return false
+	}
+
+	return metadata.Backend == "dolt" &&
+		metadata.DoltMode == "server" &&
+		metadata.DoltDatabase == expectedDB
+}
+
+// writeDoltMetadata writes dolt server config to a rig's metadata.json.
+func (c *DoltMetadataCheck) writeDoltMetadata(townRoot, rigName string) error {
+	beadsDir := c.findRigBeadsDir(townRoot, rigName)
+	if beadsDir == "" {
+		return fmt.Errorf("could not find .beads directory for rig %q", rigName)
+	}
+
+	metadataPath := filepath.Join(beadsDir, "metadata.json")
+
+	// Load existing metadata if present
+	existing := make(map[string]interface{})
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		_ = json.Unmarshal(data, &existing)
+	}
+
+	// Set dolt server fields
+	existing["database"] = "dolt"
+	existing["backend"] = "dolt"
+	existing["dolt_mode"] = "server"
+	existing["dolt_database"] = rigName
+
+	if _, ok := existing["jsonl_export"]; !ok {
+		existing["jsonl_export"] = "issues.jsonl"
+	}
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling metadata: %w", err)
+	}
+
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		return fmt.Errorf("creating beads directory: %w", err)
+	}
+
+	if err := os.WriteFile(metadataPath, append(data, '\n'), 0600); err != nil {
+		return fmt.Errorf("writing metadata.json: %w", err)
+	}
+
+	return nil
+}
+
+// findRigBeadsDir returns the canonical .beads directory for a rig.
+func (c *DoltMetadataCheck) findRigBeadsDir(townRoot, rigName string) string {
+	if rigName == "hq" {
+		return filepath.Join(townRoot, ".beads")
+	}
+
+	// Prefer mayor/rig/.beads (canonical)
+	mayorBeads := filepath.Join(townRoot, rigName, "mayor", "rig", ".beads")
+	if _, err := os.Stat(mayorBeads); err == nil {
+		return mayorBeads
+	}
+
+	// Fall back to rig-root .beads
+	rigBeads := filepath.Join(townRoot, rigName, ".beads")
+	if _, err := os.Stat(rigBeads); err == nil {
+		return rigBeads
+	}
+
+	return ""
+}
+
+// loadRigs loads the rigs configuration from rigs.json.
+func (c *DoltMetadataCheck) loadRigs(rigsPath string) map[string]struct{} {
+	rigs := make(map[string]struct{})
+
+	data, err := os.ReadFile(rigsPath)
+	if err != nil {
+		return rigs
+	}
+
+	var config struct {
+		Rigs map[string]interface{} `json:"rigs"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return rigs
+	}
+
+	for name := range config.Rigs {
+		rigs[name] = struct{}{}
+	}
+	return rigs
+}
