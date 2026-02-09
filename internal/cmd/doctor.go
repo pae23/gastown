@@ -142,7 +142,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// Register built-in checks
 	d.Register(doctor.NewStaleBinaryCheck())
-	d.Register(doctor.NewSqlite3Check())
+	// sqlite3 check removed — gastown doesn't use sqlite3 CLI (all queries go through bd)
 	d.Register(doctor.NewTownGitCheck())
 	d.Register(doctor.NewTownRootBranchCheck())
 	d.Register(doctor.NewPreCheckoutHookCheck())
