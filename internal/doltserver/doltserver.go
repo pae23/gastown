@@ -1188,6 +1188,79 @@ func IsReadOnlyError(msg string) bool {
 		strings.Contains(lower, "readonly")
 }
 
+// RecoverReadOnly detects a read-only Dolt server, restarts it, and verifies
+// recovery. This is the gt-level counterpart to the daemon's auto-recovery:
+// when a gt command (spawn, done, etc.) encounters persistent read-only errors,
+// it can call this to attempt recovery without waiting for the daemon's 30s loop.
+// Returns nil if recovery succeeded, an error if recovery failed or wasn't needed.
+func RecoverReadOnly(townRoot string) error {
+	readOnly, err := CheckReadOnly(townRoot)
+	if err != nil {
+		return fmt.Errorf("read-only probe failed: %w", err)
+	}
+	if !readOnly {
+		return nil // Server is writable, no recovery needed
+	}
+
+	fmt.Printf("Dolt server is in read-only mode, attempting recovery...\n")
+
+	// Stop the server
+	if err := Stop(townRoot); err != nil {
+		// Server might already be stopped or unreachable
+		fmt.Printf("Warning: stop returned error (proceeding with restart): %v\n", err)
+	}
+
+	// Brief pause for cleanup
+	time.Sleep(1 * time.Second)
+
+	// Restart the server
+	if err := Start(townRoot); err != nil {
+		return fmt.Errorf("failed to restart Dolt server: %w", err)
+	}
+
+	// Wait for server to be ready
+	time.Sleep(2 * time.Second)
+
+	// Verify recovery
+	readOnly, err = CheckReadOnly(townRoot)
+	if err != nil {
+		return fmt.Errorf("post-restart probe failed: %w", err)
+	}
+	if readOnly {
+		return fmt.Errorf("Dolt server still read-only after restart")
+	}
+
+	fmt.Printf("Dolt server recovered from read-only state\n")
+	return nil
+}
+
+// doltSQLWithRecovery executes a SQL statement with retry logic and, if retries
+// are exhausted due to read-only errors, attempts server restart before a final retry.
+// This is the gt-level recovery path for polecat management operations (spawn, done).
+func doltSQLWithRecovery(townRoot, rigDB, query string) error {
+	err := doltSQLWithRetry(townRoot, rigDB, query)
+	if err == nil {
+		return nil
+	}
+
+	// If the final error is a read-only error, attempt recovery
+	if !IsReadOnlyError(err.Error()) {
+		return err
+	}
+
+	// Attempt server recovery
+	if recoverErr := RecoverReadOnly(townRoot); recoverErr != nil {
+		return fmt.Errorf("read-only recovery failed: %w (original: %v)", recoverErr, err)
+	}
+
+	// Retry the operation after recovery
+	if retryErr := doltSQL(townRoot, rigDB, query); retryErr != nil {
+		return fmt.Errorf("operation failed after read-only recovery: %w", retryErr)
+	}
+
+	return nil
+}
+
 // MeasureQueryLatency times a SELECT 1 query against the Dolt server.
 func MeasureQueryLatency(townRoot string) (time.Duration, error) {
 	config := DefaultConfig(townRoot)
@@ -1379,57 +1452,36 @@ func PolecatBranchName(polecatName string) string {
 // CreatePolecatBranch creates a Dolt branch for a polecat's isolated writes.
 // Each polecat gets its own branch to eliminate optimistic lock contention.
 // Retries with exponential backoff on transient errors (read-only, manifest lock, etc).
+// If read-only errors persist after retries, attempts server recovery (gt-chx92).
 func CreatePolecatBranch(townRoot, rigDB, branchName string) error {
 	if err := validateBranchName(branchName); err != nil {
 		return fmt.Errorf("creating Dolt branch in %s: %w", rigDB, err)
 	}
 	query := fmt.Sprintf("CALL DOLT_BRANCH('%s')", branchName)
 
-	const maxRetries = 5
-	const baseBackoff = 500 * time.Millisecond
-	const maxBackoff = 15 * time.Second
-
-	var lastErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if err := doltSQL(townRoot, rigDB, query); err != nil {
-			lastErr = err
-			if !isDoltRetryableError(err) {
-				return fmt.Errorf("creating Dolt branch %s in %s: %w", branchName, rigDB, err)
-			}
-			if attempt < maxRetries {
-				backoff := baseBackoff
-				for i := 1; i < attempt; i++ {
-					backoff *= 2
-					if backoff > maxBackoff {
-						backoff = maxBackoff
-						break
-					}
-				}
-				time.Sleep(backoff)
-			}
-			continue
-		}
-		return nil
+	if err := doltSQLWithRecovery(townRoot, rigDB, query); err != nil {
+		return fmt.Errorf("creating Dolt branch %s in %s: %w", branchName, rigDB, err)
 	}
-	return fmt.Errorf("creating Dolt branch %s in %s after %d retries: %w", branchName, rigDB, maxRetries, lastErr)
+	return nil
 }
 
 // MergePolecatBranch merges a polecat's Dolt branch into main and deletes it.
 // Called at gt done time to make the polecat's beads changes visible.
 // Retries each step with exponential backoff on transient errors.
+// If read-only errors persist after retries, attempts server recovery (gt-chx92).
 func MergePolecatBranch(townRoot, rigDB, branchName string) error {
 	if err := validateBranchName(branchName); err != nil {
 		return fmt.Errorf("merging Dolt branch in %s: %w", rigDB, err)
 	}
 	// Checkout main, merge, delete branch — each as separate commands
 	// to avoid multi-statement parsing issues with dolt sql CLI.
-	if err := doltSQLWithRetry(townRoot, rigDB, "CALL DOLT_CHECKOUT('main')"); err != nil {
+	if err := doltSQLWithRecovery(townRoot, rigDB, "CALL DOLT_CHECKOUT('main')"); err != nil {
 		return fmt.Errorf("checkout main in %s: %w", rigDB, err)
 	}
-	if err := doltSQLWithRetry(townRoot, rigDB, fmt.Sprintf("CALL DOLT_MERGE('%s')", branchName)); err != nil {
+	if err := doltSQLWithRecovery(townRoot, rigDB, fmt.Sprintf("CALL DOLT_MERGE('%s')", branchName)); err != nil {
 		return fmt.Errorf("merging %s to main in %s: %w", branchName, rigDB, err)
 	}
-	if err := doltSQLWithRetry(townRoot, rigDB, fmt.Sprintf("CALL DOLT_BRANCH('-D', '%s')", branchName)); err != nil {
+	if err := doltSQLWithRecovery(townRoot, rigDB, fmt.Sprintf("CALL DOLT_BRANCH('-D', '%s')", branchName)); err != nil {
 		// Non-fatal: branch deletion failure doesn't lose data
 		fmt.Printf("Warning: could not delete Dolt branch %s: %v\n", branchName, err)
 	}

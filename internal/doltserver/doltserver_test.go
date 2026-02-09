@@ -2,6 +2,7 @@ package doltserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2212,6 +2213,46 @@ func TestHealthMetrics_ReadOnlyField(t *testing.T) {
 	// Without a running server, ReadOnly should be false (can't probe)
 	if metrics.ReadOnly {
 		t.Error("expected ReadOnly=false when no server is running")
+	}
+}
+
+func TestIsDoltRetryableError_IncludesReadOnly(t *testing.T) {
+	// Verify that read-only errors are recognized as retryable.
+	// This is critical for the recovery path: doltSQLWithRetry must
+	// retry on read-only before escalating to doltSQLWithRecovery.
+	tests := []struct {
+		msg  string
+		want bool
+	}{
+		{"cannot update manifest: database is read only", true},
+		{"database is read only", true},
+		{"optimistic lock failed", true},
+		{"serialization failure", true},
+		{"lock wait timeout exceeded", true},
+		{"try restarting transaction", true},
+		{"connection refused", false},
+		{"table not found", false},
+	}
+	for _, tt := range tests {
+		err := fmt.Errorf("%s", tt.msg)
+		if got := isDoltRetryableError(err); got != tt.want {
+			t.Errorf("isDoltRetryableError(%q) = %v, want %v", tt.msg, got, tt.want)
+		}
+	}
+}
+
+func TestRecoverReadOnly_NoServer(t *testing.T) {
+	// When no server is running, CheckReadOnly returns false (can't probe),
+	// so RecoverReadOnly should be a no-op.
+	townRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(townRoot, ".dolt-data"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RecoverReadOnly(townRoot)
+	// Should succeed (no-op) since no server means no read-only state detectable
+	if err != nil {
+		t.Errorf("RecoverReadOnly with no server: got error %v, want nil", err)
 	}
 }
 

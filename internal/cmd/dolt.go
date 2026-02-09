@@ -148,6 +148,26 @@ Safe to run multiple times (idempotent). Preserves any existing fields in metada
 	RunE: runDoltFixMetadata,
 }
 
+var doltRecoverCmd = &cobra.Command{
+	Use:   "recover",
+	Short: "Detect and recover from Dolt read-only state",
+	Long: `Detect if the Dolt server is in read-only mode and attempt recovery.
+
+When the Dolt server enters read-only mode (e.g., from concurrent write
+contention on the storage manifest), all write operations fail. This command:
+
+  1. Probes the server to detect read-only state
+  2. Stops the server if read-only
+  3. Restarts the server
+  4. Verifies recovery with a write probe
+
+If the server is already writable, this is a no-op.
+
+The daemon performs this check automatically every 30 seconds. Use this command
+for immediate recovery without waiting for the daemon's health check loop.`,
+	RunE: runDoltRecover,
+}
+
 var doltRollbackCmd = &cobra.Command{
 	Use:   "rollback [backup-dir]",
 	Short: "Restore .beads directories from a migration backup",
@@ -188,6 +208,7 @@ func init() {
 	doltCmd.AddCommand(doltListCmd)
 	doltCmd.AddCommand(doltMigrateCmd)
 	doltCmd.AddCommand(doltFixMetadataCmd)
+	doltCmd.AddCommand(doltRecoverCmd)
 	doltCmd.AddCommand(doltRollbackCmd)
 
 	doltLogsCmd.Flags().IntVarP(&doltLogLines, "lines", "n", 50, "Number of lines to show")
@@ -284,7 +305,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 		if metrics.ReadOnly {
 			fmt.Printf("\n  %s %s\n",
 				style.Bold.Render("!!!"),
-				style.Bold.Render("SERVER IS READ-ONLY — restart required (gt dolt stop && gt dolt start)"))
+				style.Bold.Render("SERVER IS READ-ONLY — run 'gt dolt recover' to restart"))
 		}
 		if len(metrics.Warnings) > 0 {
 			fmt.Printf("\n  %s\n", style.Bold.Render("Warnings:"))
@@ -633,6 +654,35 @@ func runDoltFixMetadata(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s sync.mode set failed: %v\n", style.Dim.Render("⚠"), syncErr)
 	}
 
+	return nil
+}
+
+func runDoltRecover(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	running, _, _ := doltserver.IsRunning(townRoot)
+	if !running {
+		return fmt.Errorf("Dolt server is not running — start with 'gt dolt start'")
+	}
+
+	readOnly, err := doltserver.CheckReadOnly(townRoot)
+	if err != nil {
+		return fmt.Errorf("read-only probe failed: %w", err)
+	}
+
+	if !readOnly {
+		fmt.Printf("%s Dolt server is writable (no recovery needed)\n", style.Bold.Render("✓"))
+		return nil
+	}
+
+	if err := doltserver.RecoverReadOnly(townRoot); err != nil {
+		return fmt.Errorf("recovery failed: %w", err)
+	}
+
+	fmt.Printf("%s Dolt server recovered from read-only state\n", style.Bold.Render("✓"))
 	return nil
 }
 

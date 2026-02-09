@@ -174,6 +174,7 @@ func (m *Manager) lockPool() (*flock.Flock, error) {
 // CheckDoltHealth verifies that the Dolt database is reachable before spawning.
 // Returns an error if Dolt exists but is unhealthy after retries.
 // Returns nil if beads is not configured (test/setup environments).
+// If read-only errors persist after retries, attempts server recovery (gt-chx92).
 func (m *Manager) CheckDoltHealth() error {
 	var lastErr error
 	for attempt := 1; attempt <= doltMaxRetries; attempt++ {
@@ -198,6 +199,22 @@ func (m *Manager) CheckDoltHealth() error {
 			time.Sleep(backoff)
 		}
 	}
+
+	// If the persistent failure looks like read-only, attempt server recovery
+	// before giving up. This is the gt-level recovery path (gt-chx92).
+	if lastErr != nil && doltserver.IsReadOnlyError(lastErr.Error()) {
+		townRoot, err := workspace.Find(m.rig.Path)
+		if err == nil && townRoot != "" {
+			if recoverErr := doltserver.RecoverReadOnly(townRoot); recoverErr == nil {
+				// Recovery succeeded — verify health once more
+				_, err := m.beads.Show("__health_check_nonexistent__")
+				if err == nil || errors.Is(err, beads.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+					return nil
+				}
+			}
+		}
+	}
+
 	return fmt.Errorf("%w: %v", ErrDoltUnhealthy, lastErr)
 }
 
