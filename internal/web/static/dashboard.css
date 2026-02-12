@@ -1385,7 +1385,34 @@
 
         /* Responsive - adapt to different screen sizes */
 
-        /* Medium screens */
+        /* Collapsible panels */
+        .collapse-btn {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            margin-right: 6px;
+            transition: transform 0.2s ease;
+        }
+
+        .collapse-btn:hover {
+            color: var(--text-secondary);
+            border-color: var(--text-muted);
+        }
+
+        .panel.collapsed .panel-body,
+        .panel.collapsed .panel-tabs {
+            display: none;
+        }
+
+        .panel.collapsed .collapse-btn {
+            transform: rotate(-90deg);
+        }
+
+        /* Medium screens / tablets */
         @media (max-width: 900px) {
             .summary-stats {
                 gap: 16px;
@@ -1405,6 +1432,97 @@
 
             th, td {
                 padding: 6px 8px;
+            }
+
+            /* Touch-friendly: enlarge tap targets */
+            .badge {
+                padding: 4px 10px;
+                font-size: 0.7rem;
+            }
+
+            .tab-btn {
+                padding: 10px 14px;
+                font-size: 0.85rem;
+            }
+
+            .mail-tab {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
+
+            .collapse-btn {
+                padding: 6px 12px;
+                font-size: 0.8rem;
+            }
+
+            .new-issue-btn {
+                padding: 8px 14px;
+                font-size: 0.8rem;
+            }
+
+            .cmd-btn {
+                padding: 10px 14px;
+            }
+
+            tr {
+                min-height: 44px;
+            }
+
+            th, td {
+                padding: 10px 8px;
+            }
+
+            .panel-header {
+                padding: 12px 14px;
+            }
+        }
+
+        /* Tablet portrait */
+        @media (max-width: 768px) {
+            .panels {
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            }
+
+            .summary-banner {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .summary-stats {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+
+            .summary-alerts {
+                justify-content: center;
+            }
+
+            .mayor-banner {
+                flex-direction: column;
+                gap: 12px;
+                text-align: center;
+            }
+
+            .mayor-status {
+                justify-content: center;
+            }
+
+            .health-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            /* Wider text truncation */
+            .pr-title,
+            .issue-title,
+            .hook-title,
+            .mail-subject,
+            .ready-title {
+                max-width: 150px;
+            }
+
+            .command-palette {
+                width: 95%;
             }
         }
 
@@ -1472,14 +1590,16 @@
             text-overflow: unset;
         }
 
-        /* Small screens (< 600px) */
+        /* Small screens / phones (< 600px) */
         @media (max-width: 600px) {
             body {
                 padding: 8px;
+                font-size: 12px;
             }
 
             .panels {
                 grid-template-columns: 1fr;
+                gap: 10px;
             }
 
             header {
@@ -1497,6 +1617,7 @@
                 flex-direction: column;
                 gap: 12px;
                 text-align: center;
+                padding: 10px 14px;
             }
 
             .mayor-status {
@@ -1506,6 +1627,7 @@
             .summary-banner {
                 flex-direction: column;
                 gap: 12px;
+                padding: 10px 14px;
             }
 
             .summary-stats {
@@ -1529,6 +1651,206 @@
             .alert-item {
                 font-size: 0.7rem;
                 padding: 3px 8px;
+            }
+
+            /* Touch-friendly targets: minimum 44px */
+            .panel-header {
+                padding: 12px 14px;
+                min-height: 44px;
+            }
+
+            th, td {
+                padding: 12px 8px;
+            }
+
+            .badge {
+                padding: 5px 10px;
+                font-size: 0.7rem;
+            }
+
+            .tab-btn {
+                padding: 12px 14px;
+                font-size: 0.85rem;
+            }
+
+            .mail-tab {
+                padding: 8px 12px;
+            }
+
+            .collapse-btn {
+                padding: 8px 12px;
+                font-size: 0.8rem;
+            }
+
+            .new-issue-btn,
+            .compose-btn {
+                padding: 10px 16px;
+                font-size: 0.85rem;
+            }
+
+            .attach-btn {
+                padding: 8px 12px;
+                font-size: 0.8rem;
+            }
+
+            .cmd-btn {
+                padding: 10px 14px;
+                font-size: 0.8rem;
+            }
+
+            /* Panel body: taller scroll on mobile */
+            .panel-body {
+                max-height: 220px;
+            }
+
+            /* Tables: hide less important columns on phone */
+            .health-grid {
+                grid-template-columns: 1fr;
+            }
+
+            /* Truncation tighter on phone */
+            .pr-title,
+            .issue-title,
+            .hook-title,
+            .mail-subject,
+            .ready-title,
+            .convoy-title {
+                max-width: 120px;
+            }
+
+            .polecat-issue {
+                max-width: 100px;
+            }
+
+            /* Modal fullscreen on mobile */
+            .modal-content {
+                width: 100%;
+                max-width: 100%;
+                max-height: 100vh;
+                border-radius: 0;
+                margin: 0;
+            }
+
+            /* Command palette fullscreen on mobile */
+            .command-palette-overlay {
+                padding-top: 0;
+            }
+
+            .command-palette {
+                width: 100%;
+                max-width: 100%;
+                max-height: 100vh;
+                border-radius: 0;
+            }
+
+            .command-palette-input {
+                padding: 16px;
+                font-size: 1.1rem;
+            }
+
+            .command-item {
+                padding: 14px 16px;
+            }
+
+            /* Output panel taller on mobile */
+            .output-panel {
+                max-height: 70vh;
+            }
+
+            /* Mail detail adjustments */
+            .mail-detail-meta {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            /* PR/Issue detail adjustments */
+            .pr-detail-meta,
+            .issue-detail-meta {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .pr-detail-stats {
+                flex-wrap: wrap;
+            }
+
+            /* Toast positioning */
+            .toast-container,
+            #toast-container {
+                left: 8px;
+                right: 8px;
+                top: auto;
+                bottom: 8px;
+            }
+
+            .toast {
+                min-width: auto;
+                width: 100%;
+            }
+
+            /* Form fields larger on mobile */
+            .form-group input,
+            .form-group select,
+            .form-group textarea,
+            .command-field-input,
+            .command-field-select,
+            .command-field-textarea,
+            .mail-compose-input,
+            .mail-compose-textarea,
+            .command-args-input {
+                font-size: 16px; /* Prevents iOS zoom on focus */
+                padding: 12px;
+            }
+
+            /* Mail compose fullscreen */
+            .mail-compose-actions,
+            .form-actions {
+                flex-direction: column;
+            }
+
+            .mail-send-btn,
+            .mail-cancel-btn,
+            .btn-primary,
+            .btn-secondary {
+                width: 100%;
+                text-align: center;
+                padding: 12px;
+            }
+        }
+
+        /* Extra small screens (< 400px) */
+        @media (max-width: 400px) {
+            body {
+                padding: 4px;
+            }
+
+            .panels {
+                gap: 8px;
+            }
+
+            .summary-stats {
+                gap: 8px;
+            }
+
+            .stat-value {
+                font-size: 1rem;
+            }
+
+            th, td {
+                padding: 10px 6px;
+                font-size: 0.7rem;
+            }
+
+            .panel-header h2 {
+                font-size: 0.8rem;
+            }
+
+            .pr-title,
+            .issue-title,
+            .hook-title,
+            .mail-subject,
+            .ready-title {
+                max-width: 90px;
             }
         }
 

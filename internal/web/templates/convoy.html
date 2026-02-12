@@ -122,6 +122,7 @@
                 <div class="panel-header">
                     <h2>🚚 Convoys</h2>
                     <span class="count">{{len .Convoys}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -184,6 +185,7 @@
                 <div class="panel-header">
                     <h2>👨‍💼 Crew</h2>
                     <span class="count" id="crew-count">0</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -214,6 +216,7 @@
                 <div class="panel-header">
                     <h2>⚙️ Workers</h2>
                     <span class="count">{{len .Workers}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -275,6 +278,7 @@
                 <div class="panel-header">
                     <h2>📟 Sessions</h2>
                     <span class="count">{{len .Sessions}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -314,6 +318,7 @@
                 <div class="panel-header">
                     <h2>📜 Activity</h2>
                     <span class="count">{{len .Activity}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body activity-feed">
@@ -347,6 +352,7 @@
                         <button class="mail-tab" data-tab="all">All Traffic</button>
                     </div>
                     <button class="compose-btn" id="compose-mail-btn" title="Compose new message">✎</button>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -450,6 +456,7 @@
                 <div class="panel-header">
                     <h2>🔀 Merge Queue</h2>
                     <span class="count">{{len .MergeQueue}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -536,6 +543,7 @@
                 <div class="panel-header">
                     <h2>🚨 Escalations</h2>
                     <span class="count{{if .Escalations}} count-alert{{end}}">{{len .Escalations}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -583,6 +591,7 @@
                 <div class="panel-header">
                     <h2>🏗️ Rigs</h2>
                     <span class="count">{{len .Rigs}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -623,6 +632,7 @@
                 <div class="panel-header">
                     <h2>🐕 Dogs</h2>
                     <span class="count">{{len .Dogs}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -664,6 +674,7 @@
                 <div class="panel-header">
                     <h2>📋 Queues</h2>
                     <span class="count">{{len .Queues}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">
@@ -705,6 +716,7 @@
                     <h2>📋 Work</h2>
                     <span class="count">{{len .Issues}}</span>
                     <button class="new-issue-btn" onclick="openIssueModal()">+ New</button>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-tabs">
@@ -789,6 +801,7 @@
                 <div class="panel-header">
                     <h2>🪝 Hooks</h2>
                     <span class="count{{if .Hooks}} {{end}}">{{len .Hooks}}</span>
+                    <button class="collapse-btn" aria-label="Toggle panel">▼</button>
                     <button class="expand-btn">Expand</button>
                 </div>
                 <div class="panel-body">

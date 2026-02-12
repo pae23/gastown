@@ -30,6 +30,20 @@
         }
     });
 
+    // ============================================
+    // COLLAPSE BUTTON HANDLER
+    // ============================================
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.collapse-btn');
+        if (!btn) return;
+
+        e.preventDefault();
+        var panel = btn.closest('.panel');
+        if (!panel) return;
+
+        panel.classList.toggle('collapsed');
+    });
+
     // After HTMX swap - morph preserves most state, but we need to re-init some things
     document.body.addEventListener('htmx:afterSwap', function() {
         // Morph preserves expanded class, so we don't need to close panels anymore
