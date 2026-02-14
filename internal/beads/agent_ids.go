@@ -237,14 +237,24 @@ func ValidateAgentID(id string) error {
 
 	// For 3+ parts, scan from the right to find a known role.
 	// This allows rig names to contain hyphens (e.g., "my-project").
+	// When a worker name collides with a role keyword (e.g., polecat named
+	// "witness"), prefer the named-role interpretation over singleton.
 	roleIdx := -1
 	var role string
 	for i := len(parts) - 1; i >= 0; i-- {
-		if isValidRole(parts[i]) {
-			roleIdx = i
-			role = parts[i]
+		if !isValidRole(parts[i]) {
+			continue
+		}
+		// Found a role keyword. Check if the part to its left is a named
+		// role — if so, the keyword is actually the worker's name.
+		if i >= 2 && isNamedRole(parts[i-1]) {
+			roleIdx = i - 1
+			role = parts[i-1]
 			break
 		}
+		roleIdx = i
+		role = parts[i]
+		break
 	}
 
 	if roleIdx == -1 {
@@ -431,17 +441,34 @@ func ParseAgentBeadID(id string) (rig, role, name string, ok bool) {
 
 	// Scan from right for known role markers to handle hyphenated rig names.
 	// Format: <rig>-<role>[-<name>] where rig may contain hyphens.
+	//
+	// When a worker name collides with a role keyword (e.g., a polecat named
+	// "witness"), we prefer the named-role interpretation. A named role like
+	// "polecat" at position i-1 consuming the keyword at position i as its
+	// name is more specific than treating the keyword as a singleton role.
 	for i := len(parts) - 1; i >= 1; i-- {
 		p := parts[i]
-		if isRigLevelRole(p) {
-			// Singleton roles: witness, refinery
-			return strings.Join(parts[:i], "-"), p, "", true
-		}
 		if isNamedRole(p) && i < len(parts)-1 {
 			// Named roles with a name following: crew, polecat
 			return strings.Join(parts[:i], "-"), p, strings.Join(parts[i+1:], "-"), true
 		}
+		if isRigLevelRole(p) {
+			// Before accepting as singleton, check if the part to the left
+			// is a named role — if so, this keyword is actually the worker's
+			// name, not a singleton role marker.
+			if i >= 2 && isNamedRole(parts[i-1]) {
+				return strings.Join(parts[:i-1], "-"), parts[i-1], strings.Join(parts[i:], "-"), true
+			}
+			// Genuine singleton role: witness, refinery
+			return strings.Join(parts[:i], "-"), p, "", true
+		}
 		if isNamedRole(p) && i == len(parts)-1 {
+			// Named role at the end without a following name. Check if the
+			// part to the left is also a named role — if so, this keyword
+			// is the worker's name for that role.
+			if i >= 2 && isNamedRole(parts[i-1]) {
+				return strings.Join(parts[:i-1], "-"), parts[i-1], p, true
+			}
 			// Named role without a name (invalid but handle gracefully)
 			return strings.Join(parts[:i], "-"), p, "", true
 		}
