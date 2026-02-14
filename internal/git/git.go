@@ -1183,13 +1183,15 @@ func (g *Git) CheckUncommittedWork() (*UncommittedWorkStatus, error) {
 func (g *Git) BranchPushedToRemote(localBranch, remote string) (bool, int, error) {
 	remoteBranch := remote + "/" + localBranch
 
-	// First check if the remote branch exists
-	exists, err := g.RemoteBranchExists(remote, localBranch)
+	// Check if the remote branch exists via ls-remote and save the output.
+	// The output contains the SHA which we reuse in the fallback path below,
+	// avoiding a redundant second ls-remote call.
+	lsOut, err := g.run("ls-remote", "--heads", remote, localBranch)
 	if err != nil {
 		return false, 0, fmt.Errorf("checking remote branch: %w", err)
 	}
 
-	if !exists {
+	if lsOut == "" {
 		// Remote branch doesn't exist - count commits since origin/main (or HEAD if that fails)
 		count, err := g.run("rev-list", "--count", "origin/main..HEAD")
 		if err != nil {
@@ -1218,7 +1220,7 @@ func (g *Git) BranchPushedToRemote(localBranch, remote string) (bool, int, error
 	remoteRef := "refs/remotes/" + remoteBranch
 	if _, err := g.run("rev-parse", "--verify", remoteRef); err != nil {
 		// Remote ref doesn't exist locally - update it from FETCH_HEAD if fetch succeeded.
-		// Best-effort: if this fails, the code below falls back to ls-remote.
+		// Best-effort: if this fails, the code below falls back to the saved ls-remote SHA.
 		if fetchErr == nil {
 			_, _ = g.run("update-ref", remoteRef, "FETCH_HEAD")
 		}
@@ -1228,22 +1230,13 @@ func (g *Git) BranchPushedToRemote(localBranch, remote string) (bool, int, error
 	count, err := g.run("rev-list", "--count", remoteBranch+"..HEAD")
 	if err != nil {
 		// Fallback: If we can't use the tracking ref (possibly missing remote.origin.fetch),
-		// get the remote commit SHA directly via ls-remote and compare.
+		// use the SHA from the ls-remote call above instead of hitting the network again.
 		// See: gt-0eh3r (gt done fails in worktree with missing remote.origin.fetch config)
-		remoteSHA, lsErr := g.run("ls-remote", remote, "refs/heads/"+localBranch)
-		if lsErr != nil {
-			return false, 0, fmt.Errorf("counting unpushed commits: %w (fallback also failed: %v)", err, lsErr)
-		}
-		// Parse SHA from ls-remote output (format: "<sha>\trefs/heads/<branch>")
-		remoteSHA = strings.TrimSpace(remoteSHA)
-		if remoteSHA == "" {
-			return false, 0, fmt.Errorf("counting unpushed commits: %w (remote branch not found)", err)
-		}
-		parts := strings.Fields(remoteSHA)
+		parts := strings.Fields(strings.TrimSpace(lsOut))
 		if len(parts) == 0 {
 			return false, 0, fmt.Errorf("counting unpushed commits: %w (invalid ls-remote output)", err)
 		}
-		remoteSHA = parts[0]
+		remoteSHA := parts[0]
 
 		// Count commits from remote SHA to HEAD
 		count, err = g.run("rev-list", "--count", remoteSHA+"..HEAD")
