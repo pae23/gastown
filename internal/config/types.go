@@ -78,6 +78,9 @@ type TownSettings struct {
 
 	// FeedCurator configures event deduplication and aggregation windows.
 	FeedCurator *FeedCuratorConfig `json:"feed_curator,omitempty"`
+
+	// Convoy configures convoy behavior settings.
+	Convoy *ConvoyConfig `json:"convoy,omitempty"`
 }
 
 // NewTownSettings creates a new TownSettings with defaults.
@@ -165,6 +168,13 @@ func DefaultFeedCuratorConfig() *FeedCuratorConfig {
 		SlingAggregateWindow: "30s",
 		MinAggregateCount:    3,
 	}
+}
+
+// ConvoyConfig configures convoy behavior settings.
+type ConvoyConfig struct {
+	// NotifyOnComplete controls whether convoy completion pushes a notification
+	// into the active Mayor session (in addition to mail). Opt-in; default false.
+	NotifyOnComplete bool `json:"notify_on_complete,omitempty"`
 }
 
 // ParseDurationOrDefault parses a Go duration string, returning fallback on error or empty input.
