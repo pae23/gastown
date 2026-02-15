@@ -2783,3 +2783,405 @@ func TestVerifyDatabases_NoServer(t *testing.T) {
 		t.Errorf("expected reachability or query error, got: %v", err)
 	}
 }
+
+// =============================================================================
+// Orphaned database detection tests
+// =============================================================================
+
+// setupDoltDB creates a fake Dolt database directory with a .dolt subdirectory
+// and some data to simulate a real database for size calculations.
+func setupDoltDB(t *testing.T, dataDir, dbName string) string {
+	t.Helper()
+	dbPath := filepath.Join(dataDir, dbName)
+	doltDir := filepath.Join(dbPath, ".dolt")
+	if err := os.MkdirAll(doltDir, 0755); err != nil {
+		t.Fatalf("creating dolt dir for %s: %v", dbName, err)
+	}
+	// Write a small file so dirSize returns non-zero
+	if err := os.WriteFile(filepath.Join(doltDir, "manifest"), []byte("test"), 0644); err != nil {
+		t.Fatalf("writing manifest for %s: %v", dbName, err)
+	}
+	return dbPath
+}
+
+// setupRigsJSON creates a rigs.json with the given rig names.
+func setupRigsJSON(t *testing.T, townRoot string, rigNames []string) {
+	t.Helper()
+	mayorDir := filepath.Join(townRoot, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatalf("creating mayor dir: %v", err)
+	}
+	rigs := make(map[string]interface{})
+	for _, name := range rigNames {
+		rigs[name] = map[string]interface{}{}
+	}
+	data, err := json.Marshal(map[string]interface{}{"rigs": rigs})
+	if err != nil {
+		t.Fatalf("marshaling rigs.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), data, 0644); err != nil {
+		t.Fatalf("writing rigs.json: %v", err)
+	}
+}
+
+// setupRigMetadata creates a .beads/metadata.json for a rig with Dolt server config.
+func setupRigMetadata(t *testing.T, townRoot, rigName, doltDatabase string) {
+	t.Helper()
+	var beadsDir string
+	if rigName == "hq" {
+		beadsDir = filepath.Join(townRoot, ".beads")
+	} else {
+		beadsDir = filepath.Join(townRoot, rigName, "mayor", "rig", ".beads")
+	}
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatalf("creating beads dir for %s: %v", rigName, err)
+	}
+	meta := map[string]interface{}{
+		"backend":       "dolt",
+		"dolt_mode":     "server",
+		"dolt_database": doltDatabase,
+		"jsonl_export":  "issues.jsonl",
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshaling metadata for %s: %v", rigName, err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), data, 0644); err != nil {
+		t.Fatalf("writing metadata for %s: %v", rigName, err)
+	}
+}
+
+func TestFindOrphanedDatabases_NoOrphans(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// Create databases that are all referenced
+	setupDoltDB(t, dataDir, "hq")
+	setupDoltDB(t, dataDir, "gastown")
+
+	// Set up rigs and metadata
+	setupRigsJSON(t, townRoot, []string{"gastown"})
+	setupRigMetadata(t, townRoot, "hq", "hq")
+	setupRigMetadata(t, townRoot, "gastown", "gastown")
+
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("expected 0 orphans, got %d: %v", len(orphans), orphans)
+	}
+}
+
+func TestFindOrphanedDatabases_DetectsOrphans(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// Create referenced databases
+	setupDoltDB(t, dataDir, "hq")
+	setupDoltDB(t, dataDir, "wyvern")
+
+	// Create orphaned database (old partial setup naming)
+	setupDoltDB(t, dataDir, "beads_wy")
+
+	// Set up rigs and metadata — only hq and wyvern are referenced
+	setupRigsJSON(t, townRoot, []string{"wyvern"})
+	setupRigMetadata(t, townRoot, "hq", "hq")
+	setupRigMetadata(t, townRoot, "wyvern", "wyvern")
+
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 1 {
+		t.Fatalf("expected 1 orphan, got %d: %v", len(orphans), orphans)
+	}
+	if orphans[0].Name != "beads_wy" {
+		t.Errorf("expected orphan name 'beads_wy', got %q", orphans[0].Name)
+	}
+	if orphans[0].SizeBytes <= 0 {
+		t.Errorf("expected positive size, got %d", orphans[0].SizeBytes)
+	}
+}
+
+func TestFindOrphanedDatabases_MultipleOrphans(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// One referenced database
+	setupDoltDB(t, dataDir, "gastown")
+
+	// Multiple orphans
+	setupDoltDB(t, dataDir, "old_setup")
+	setupDoltDB(t, dataDir, "beads_gt")
+	setupDoltDB(t, dataDir, "stale_backup")
+
+	setupRigsJSON(t, townRoot, []string{"gastown"})
+	setupRigMetadata(t, townRoot, "gastown", "gastown")
+
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 3 {
+		t.Fatalf("expected 3 orphans, got %d", len(orphans))
+	}
+
+	names := make(map[string]bool)
+	for _, o := range orphans {
+		names[o.Name] = true
+	}
+	for _, want := range []string{"old_setup", "beads_gt", "stale_backup"} {
+		if !names[want] {
+			t.Errorf("expected orphan %q not found", want)
+		}
+	}
+}
+
+func TestFindOrphanedDatabases_EmptyDataDir(t *testing.T) {
+	townRoot := t.TempDir()
+	// No .dolt-data directory at all
+
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("expected 0 orphans for missing data dir, got %d", len(orphans))
+	}
+}
+
+func TestFindOrphanedDatabases_IgnoresNonDoltDirs(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// Create a referenced database
+	setupDoltDB(t, dataDir, "hq")
+	setupRigsJSON(t, townRoot, []string{})
+	setupRigMetadata(t, townRoot, "hq", "hq")
+
+	// Create a directory WITHOUT .dolt — should be ignored entirely
+	nonDoltDir := filepath.Join(dataDir, "not_a_db")
+	if err := os.MkdirAll(nonDoltDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("expected 0 orphans (non-dolt dir should be ignored), got %d: %v", len(orphans), orphans)
+	}
+}
+
+func TestCollectReferencedDatabases_HQOnly(t *testing.T) {
+	townRoot := t.TempDir()
+
+	// Only HQ metadata, no rigs
+	setupRigMetadata(t, townRoot, "hq", "hq")
+	setupRigsJSON(t, townRoot, []string{})
+
+	referenced := collectReferencedDatabases(townRoot)
+	if !referenced["hq"] {
+		t.Error("expected 'hq' to be referenced")
+	}
+	if len(referenced) != 1 {
+		t.Errorf("expected 1 referenced, got %d: %v", len(referenced), referenced)
+	}
+}
+
+func TestCollectReferencedDatabases_MultipleRigs(t *testing.T) {
+	townRoot := t.TempDir()
+
+	setupRigsJSON(t, townRoot, []string{"gastown", "beads", "wyvern"})
+	setupRigMetadata(t, townRoot, "hq", "hq")
+	setupRigMetadata(t, townRoot, "gastown", "gastown")
+	setupRigMetadata(t, townRoot, "beads", "beads")
+	setupRigMetadata(t, townRoot, "wyvern", "wyvern")
+
+	referenced := collectReferencedDatabases(townRoot)
+	for _, want := range []string{"hq", "gastown", "beads", "wyvern"} {
+		if !referenced[want] {
+			t.Errorf("expected %q to be referenced", want)
+		}
+	}
+	if len(referenced) != 4 {
+		t.Errorf("expected 4 referenced, got %d", len(referenced))
+	}
+}
+
+func TestCollectReferencedDatabases_CustomDatabaseName(t *testing.T) {
+	townRoot := t.TempDir()
+
+	// Rig name differs from dolt_database name
+	setupRigsJSON(t, townRoot, []string{"myrig"})
+	setupRigMetadata(t, townRoot, "myrig", "custom_db_name")
+
+	referenced := collectReferencedDatabases(townRoot)
+	if !referenced["custom_db_name"] {
+		t.Error("expected 'custom_db_name' to be referenced")
+	}
+	if referenced["myrig"] {
+		t.Error("rig name 'myrig' should not be in referenced set (only dolt_database value)")
+	}
+}
+
+func TestCollectReferencedDatabases_NoMetadata(t *testing.T) {
+	townRoot := t.TempDir()
+	setupRigsJSON(t, townRoot, []string{"gastown"})
+	// No metadata.json for gastown — should not crash
+
+	referenced := collectReferencedDatabases(townRoot)
+	if len(referenced) != 0 {
+		t.Errorf("expected 0 referenced with no metadata, got %d: %v", len(referenced), referenced)
+	}
+}
+
+func TestCollectReferencedDatabases_NoRigsJSON(t *testing.T) {
+	townRoot := t.TempDir()
+	// No mayor/rigs.json at all — should only check HQ
+	setupRigMetadata(t, townRoot, "hq", "hq")
+
+	referenced := collectReferencedDatabases(townRoot)
+	if !referenced["hq"] {
+		t.Error("expected 'hq' to be referenced even without rigs.json")
+	}
+	if len(referenced) != 1 {
+		t.Errorf("expected 1 referenced, got %d", len(referenced))
+	}
+}
+
+func TestRemoveDatabase_RemovesDirectory(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// Create an orphan database to remove
+	setupDoltDB(t, dataDir, "orphan_db")
+
+	// Verify it exists
+	dbPath := filepath.Join(dataDir, "orphan_db")
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("setup failed: orphan_db should exist: %v", err)
+	}
+
+	err := RemoveDatabase(townRoot, "orphan_db")
+	if err != nil {
+		t.Fatalf("RemoveDatabase: %v", err)
+	}
+
+	// Verify it's gone
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("expected orphan_db to be removed, but it still exists")
+	}
+}
+
+func TestRemoveDatabase_ErrorOnMissing(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RemoveDatabase(townRoot, "nonexistent")
+	if err == nil {
+		t.Error("expected error for nonexistent database")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+func TestListDatabases_OnlyIncludesDoltDirs(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	// Valid dolt databases
+	setupDoltDB(t, dataDir, "db1")
+	setupDoltDB(t, dataDir, "db2")
+
+	// Non-dolt directories (should be excluded)
+	if err := os.MkdirAll(filepath.Join(dataDir, "plain_dir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// File (should be excluded)
+	if err := os.WriteFile(filepath.Join(dataDir, "a_file"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dbs, err := ListDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("ListDatabases: %v", err)
+	}
+	if len(dbs) != 2 {
+		t.Fatalf("expected 2 databases, got %d: %v", len(dbs), dbs)
+	}
+
+	names := make(map[string]bool)
+	for _, db := range dbs {
+		names[db] = true
+	}
+	if !names["db1"] || !names["db2"] {
+		t.Errorf("expected db1 and db2, got %v", dbs)
+	}
+}
+
+func TestDatabaseExists_TrueForExisting(t *testing.T) {
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+	setupDoltDB(t, dataDir, "mydb")
+
+	if !DatabaseExists(townRoot, "mydb") {
+		t.Error("expected DatabaseExists to return true for existing database")
+	}
+}
+
+func TestDatabaseExists_FalseForMissing(t *testing.T) {
+	townRoot := t.TempDir()
+
+	if DatabaseExists(townRoot, "noexist") {
+		t.Error("expected DatabaseExists to return false for missing database")
+	}
+}
+
+func TestFindOrphanedDatabases_EndToEnd(t *testing.T) {
+	// Simulates the exact scenario from the bug report:
+	// .dolt-data/ contains beads_wy/ (old) and wyvern/ (new).
+	// Only wyvern is referenced. beads_wy should be detected as orphaned.
+	townRoot := t.TempDir()
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+
+	setupDoltDB(t, dataDir, "hq")
+	setupDoltDB(t, dataDir, "wyvern")
+	setupDoltDB(t, dataDir, "beads_wy") // orphan: old partial setup
+
+	setupRigsJSON(t, townRoot, []string{"wyvern"})
+	setupRigMetadata(t, townRoot, "hq", "hq")
+	setupRigMetadata(t, townRoot, "wyvern", "wyvern")
+
+	// Step 1: Detect orphans
+	orphans, err := FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases: %v", err)
+	}
+	if len(orphans) != 1 {
+		t.Fatalf("expected 1 orphan (beads_wy), got %d: %v", len(orphans), orphans)
+	}
+	if orphans[0].Name != "beads_wy" {
+		t.Errorf("expected orphan 'beads_wy', got %q", orphans[0].Name)
+	}
+
+	// Step 2: Remove the orphan
+	if err := RemoveDatabase(townRoot, "beads_wy"); err != nil {
+		t.Fatalf("RemoveDatabase: %v", err)
+	}
+
+	// Step 3: Verify no more orphans
+	orphans, err = FindOrphanedDatabases(townRoot)
+	if err != nil {
+		t.Fatalf("FindOrphanedDatabases after cleanup: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("expected 0 orphans after cleanup, got %d", len(orphans))
+	}
+}
