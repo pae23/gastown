@@ -384,7 +384,7 @@ func runPolecatList(cmd *cobra.Command, args []string) error {
 
 	// Collect polecats from all rigs
 	t := tmux.NewTmux()
-	var allPolecats []PolecatListItem
+	allPolecats := make([]PolecatListItem, 0)
 
 	for _, r := range rigs {
 		polecatGit := git.NewGit(r.Path)
