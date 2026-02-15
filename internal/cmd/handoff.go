@@ -738,8 +738,10 @@ func sendHandoffMail(subject, message string) (string, error) {
 
 	// Create mail bead directly using bd create with --silent to get the ID
 	// Mail goes to town-level beads (hq- prefix)
+	// Flags go first, then -- to end flag parsing, then the positional subject.
+	// This prevents subjects like "--help" from being parsed as flags.
 	args := []string{
-		"create", subject,
+		"create",
 		"--assignee", agentID,
 		"-d", message,
 		"--priority", "2",
@@ -747,6 +749,7 @@ func sendHandoffMail(subject, message string) (string, error) {
 		"--actor", agentID,
 		"--ephemeral", // Handoff mail is ephemeral
 		"--silent",    // Output only the bead ID
+		"--", subject,
 	}
 
 	cmd := exec.Command("bd", args...)

@@ -887,8 +887,10 @@ func (r *Router) sendToSingle(msg *Message) error {
 		labels = append(labels, "cc:"+ccIdentity)
 	}
 
-	// Build command: bd create <subject> --assignee=<recipient> -d <body> --labels=gt:message,...
-	args := []string{"create", msg.Subject,
+	// Build command: bd create --assignee=<recipient> -d <body> --labels=gt:message,... -- <subject>
+	// Flags go first, then -- to end flag parsing, then the positional subject.
+	// This prevents subjects like "--help" from being parsed as flags (see web/api.go).
+	args := []string{"create",
 		"--assignee", toIdentity,
 		"-d", msg.Body,
 	}
@@ -909,6 +911,10 @@ func (r *Router) sendToSingle(msg *Message) error {
 	if r.shouldBeWisp(msg) {
 		args = append(args, "--ephemeral")
 	}
+
+	// End flag parsing with --, then add subject as positional argument.
+	// This prevents subjects like "--help" or "--json" from being parsed as flags.
+	args = append(args, "--", msg.Subject)
 
 	beadsDir := r.resolveBeadsDir(msg.To)
 	if err := r.ensureCustomTypes(beadsDir); err != nil {
@@ -999,9 +1005,11 @@ func (r *Router) sendToQueue(msg *Message) error {
 		labels = append(labels, "cc:"+ccIdentity)
 	}
 
-	// Build command: bd create <subject> --assignee=queue:<name> -d <body>
+	// Build command: bd create --assignee=queue:<name> -d <body> ... -- <subject>
+	// Flags go first, then -- to end flag parsing, then the positional subject.
+	// This prevents subjects like "--help" from being parsed as flags.
 	// Use queue:<name> as assignee so inbox queries can filter by queue
-	args := []string{"create", msg.Subject,
+	args := []string{"create",
 		"--assignee", msg.To, // queue:name
 		"-d", msg.Body,
 	}
@@ -1020,6 +1028,9 @@ func (r *Router) sendToQueue(msg *Message) error {
 
 	// Queue messages are never ephemeral - they need to persist until claimed
 	// (deliberately not checking shouldBeWisp)
+
+	// End flag parsing, then subject as positional argument
+	args = append(args, "--", msg.Subject)
 
 	// Queue messages go to town-level beads (shared location)
 	beadsDir := r.resolveBeadsDir("")
@@ -1075,9 +1086,11 @@ func (r *Router) sendToAnnounce(msg *Message) error {
 		labels = append(labels, "cc:"+ccIdentity)
 	}
 
-	// Build command: bd create <subject> --assignee=announce:<name> -d <body>
+	// Build command: bd create --assignee=announce:<name> -d <body> ... -- <subject>
+	// Flags go first, then -- to end flag parsing, then the positional subject.
+	// This prevents subjects like "--help" from being parsed as flags.
 	// Use announce:<name> as assignee so queries can filter by channel
-	args := []string{"create", msg.Subject,
+	args := []string{"create",
 		"--assignee", msg.To, // announce:name
 		"-d", msg.Body,
 	}
@@ -1096,6 +1109,9 @@ func (r *Router) sendToAnnounce(msg *Message) error {
 
 	// Announce messages are never ephemeral - they need to persist for readers
 	// (deliberately not checking shouldBeWisp)
+
+	// End flag parsing, then subject as positional argument
+	args = append(args, "--", msg.Subject)
 
 	// Announce messages go to town-level beads (shared location)
 	beadsDir := r.resolveBeadsDir("")
@@ -1153,9 +1169,11 @@ func (r *Router) sendToChannel(msg *Message) error {
 		labels = append(labels, "cc:"+ccIdentity)
 	}
 
-	// Build command: bd create <subject> --assignee=channel:<name> -d <body>
+	// Build command: bd create --assignee=channel:<name> -d <body> ... -- <subject>
+	// Flags go first, then -- to end flag parsing, then the positional subject.
+	// This prevents subjects like "--help" from being parsed as flags.
 	// Use channel:<name> as assignee so queries can filter by channel
-	args := []string{"create", msg.Subject,
+	args := []string{"create",
 		"--assignee", msg.To, // channel:name
 		"-d", msg.Body,
 	}
@@ -1174,6 +1192,9 @@ func (r *Router) sendToChannel(msg *Message) error {
 
 	// Channel messages are never ephemeral - they persist according to retention policy
 	// (deliberately not checking shouldBeWisp)
+
+	// End flag parsing, then subject as positional argument
+	args = append(args, "--", msg.Subject)
 
 	// Channel messages go to town-level beads (shared location)
 	beadsDir := r.resolveBeadsDir("")
