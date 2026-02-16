@@ -2036,6 +2036,22 @@ func TestGetConnectionStringWithPassword(t *testing.T) {
 	}
 }
 
+func TestGetConnectionStringSpecialCharsPassword(t *testing.T) {
+	t.Setenv("GT_DOLT_HOST", "dolt-server")
+	t.Setenv("GT_DOLT_PORT", "3307")
+	t.Setenv("GT_DOLT_USER", "admin")
+	t.Setenv("GT_DOLT_PASSWORD", "p@ss:w0rd/ok")
+
+	townRoot := t.TempDir()
+
+	s := GetConnectionString(townRoot)
+	// '@', ':', '/' are percent-encoded in the password via url.UserPassword
+	want := "admin:p%40ss%3Aw0rd%2Fok@tcp(dolt-server:3307)/"
+	if s != want {
+		t.Errorf("got %q, want %q", s, want)
+	}
+}
+
 func TestConfigIsRemote(t *testing.T) {
 	tests := []struct {
 		host   string

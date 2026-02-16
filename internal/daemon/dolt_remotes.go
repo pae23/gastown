@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/steveyegge/gastown/internal/doltserver"
 )
 
 const (
@@ -121,8 +123,13 @@ func (d *Daemon) runDoltSQL(dataDir, query string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), doltPushTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-q", query)
-	cmd.Dir = dataDir
+	dsConfig := doltserver.DefaultConfig(d.config.TownRoot)
+	args := append([]string{"sql"}, dsConfig.SQLArgs()...)
+	args = append(args, "-q", query)
+	cmd := exec.CommandContext(ctx, "dolt", args...)
+	if !dsConfig.IsRemote() {
+		cmd.Dir = dataDir
+	}
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -176,8 +183,13 @@ func (d *Daemon) databaseHasRemote(dataDir, db, remote string) bool {
 	defer cancel()
 
 	query := fmt.Sprintf("USE `%s`; SELECT name FROM dolt_remotes WHERE name = '%s'", db, remote)
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-r", "csv", "-q", query)
-	cmd.Dir = dataDir
+	dsConfig := doltserver.DefaultConfig(d.config.TownRoot)
+	args := append([]string{"sql"}, dsConfig.SQLArgs()...)
+	args = append(args, "-r", "csv", "-q", query)
+	cmd := exec.CommandContext(ctx, "dolt", args...)
+	if !dsConfig.IsRemote() {
+		cmd.Dir = dataDir
+	}
 
 	output, err := cmd.Output()
 	if err != nil {

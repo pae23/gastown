@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -702,9 +703,11 @@ func GetConnectionStringForRig(townRoot, rigName string) string {
 }
 
 // userDSN returns the user[:password] portion of a DSN connection string.
+// Special characters in the password (e.g. '@', '/') are percent-encoded
+// via url.UserPassword to prevent misinterpretation by DSN parsers.
 func (c *Config) userDSN() string {
 	if c.Password != "" {
-		return c.User + ":" + c.Password
+		return url.UserPassword(c.User, c.Password).String()
 	}
 	return c.User
 }

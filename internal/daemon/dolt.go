@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/steveyegge/gastown/internal/doltserver"
 )
 
 const doltCmdTimeout = 15 * time.Second
@@ -143,6 +145,21 @@ func NewDoltServerManager(townRoot string, config *DoltServerConfig, logger func
 		townRoot: townRoot,
 		logger:   logger,
 	}
+}
+
+// buildDoltSQLCmd creates an exec.Cmd for "dolt sql" with the proper connection
+// arguments. Uses doltserver.DefaultConfig to pick up GT_DOLT_* environment
+// variable overrides and conditionally sets cmd.Dir for local servers.
+func (m *DoltServerManager) buildDoltSQLCmd(ctx context.Context, extraArgs ...string) *exec.Cmd {
+	dsConfig := doltserver.DefaultConfig(m.townRoot)
+	args := []string{"sql"}
+	args = append(args, dsConfig.SQLArgs()...)
+	args = append(args, extraArgs...)
+	cmd := exec.CommandContext(ctx, "dolt", args...)
+	if !dsConfig.IsRemote() {
+		cmd.Dir = m.config.DataDir
+	}
+	return cmd
 }
 
 func (m *DoltServerManager) now() time.Time {
@@ -805,8 +822,7 @@ func (m *DoltServerManager) checkHealthLocked() error {
 	defer cancel()
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-q", "SELECT 1")
-	cmd.Dir = m.config.DataDir
+	cmd := m.buildDoltSQLCmd(ctx, "-q", "SELECT 1")
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -834,11 +850,10 @@ func (m *DoltServerManager) checkHealthLocked() error {
 func (m *DoltServerManager) checkConnectionCount() {
 	ctx, cancel := context.WithTimeout(context.Background(), doltCmdTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "dolt", "sql",
+	cmd := m.buildDoltSQLCmd(ctx,
 		"-r", "csv",
 		"-q", "SELECT COUNT(*) AS cnt FROM information_schema.PROCESSLIST",
 	)
-	cmd.Dir = m.config.DataDir
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -918,8 +933,7 @@ func (m *DoltServerManager) checkWriteHealthLocked() error {
 		"USE `%s`; CREATE TABLE IF NOT EXISTS `__gt_health_probe` (v INT PRIMARY KEY); REPLACE INTO `__gt_health_probe` VALUES (1); DROP TABLE IF EXISTS `__gt_health_probe`",
 		db,
 	)
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-q", query)
-	cmd.Dir = m.config.DataDir
+	cmd := m.buildDoltSQLCmd(ctx, "-q", query)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1011,11 +1025,10 @@ func (m *DoltServerManager) getDoltVersion() (string, error) {
 func (m *DoltServerManager) listDatabases() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), doltCmdTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "dolt", "sql",
+	cmd := m.buildDoltSQLCmd(ctx,
 		"-r", "json",
 		"-q", "SHOW DATABASES",
 	)
-	cmd.Dir = m.config.DataDir
 
 	output, err := cmd.Output()
 	if err != nil {
