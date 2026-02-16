@@ -73,6 +73,27 @@ func setupServerMetadata(t *testing.T, beadsDir, host string, port int) {
 	}
 }
 
+// setupRigsJSON creates a minimal mayor/rigs.json for tests.
+func setupRigsJSON(t *testing.T, townRoot string, rigNames []string) {
+	t.Helper()
+	mayorDir := filepath.Join(townRoot, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	rigs := "{"
+	for i, name := range rigNames {
+		if i > 0 {
+			rigs += ","
+		}
+		rigs += `"` + name + `":{"git_url":"https://example.com/` + name + `.git","added_at":"2025-01-01T00:00:00Z"}`
+	}
+	rigs += "}"
+	content := `{"version":1,"rigs":` + rigs + `}`
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGetServerAddr(t *testing.T) {
 	check := NewDoltServerReachableCheck()
 

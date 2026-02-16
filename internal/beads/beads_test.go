@@ -1943,11 +1943,11 @@ func TestSetupRedirect(t *testing.T) {
 			t.Fatalf("mkdir crew beads: %v", err)
 		}
 		// Runtime files (should be removed)
-		if err := os.WriteFile(filepath.Join(crewBeads, "beads.db"), []byte("fake db"), 0644); err != nil {
-			t.Fatalf("write fake db: %v", err)
+		if err := os.WriteFile(filepath.Join(crewBeads, "daemon.lock"), []byte("1234"), 0644); err != nil {
+			t.Fatalf("write daemon.lock: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(crewBeads, "issues.jsonl"), []byte("{}"), 0644); err != nil {
-			t.Fatalf("write issues.jsonl: %v", err)
+		if err := os.WriteFile(filepath.Join(crewBeads, "metadata.json"), []byte("{}"), 0644); err != nil {
+			t.Fatalf("write metadata.json: %v", err)
 		}
 		// Tracked files (should be preserved)
 		if err := os.WriteFile(filepath.Join(crewBeads, "config.yaml"), []byte("prefix: test"), 0644); err != nil {
@@ -1962,11 +1962,11 @@ func TestSetupRedirect(t *testing.T) {
 		}
 
 		// Verify runtime files were cleaned up
-		if _, err := os.Stat(filepath.Join(crewBeads, "beads.db")); !os.IsNotExist(err) {
-			t.Error("beads.db should have been removed")
+		if _, err := os.Stat(filepath.Join(crewBeads, "daemon.lock")); !os.IsNotExist(err) {
+			t.Error("daemon.lock should have been removed")
 		}
-		if _, err := os.Stat(filepath.Join(crewBeads, "issues.jsonl")); !os.IsNotExist(err) {
-			t.Error("issues.jsonl should have been removed")
+		if _, err := os.Stat(filepath.Join(crewBeads, "metadata.json")); !os.IsNotExist(err) {
+			t.Error("metadata.json should have been removed")
 		}
 
 		// Verify tracked files were preserved

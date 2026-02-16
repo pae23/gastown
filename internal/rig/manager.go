@@ -91,8 +91,7 @@ type RigConfig struct {
 
 // BeadsConfig represents beads configuration for the rig.
 type BeadsConfig struct {
-	Prefix     string `json:"prefix"`                // issue prefix (e.g., "gt")
-	SyncRemote string `json:"sync_remote,omitempty"` // git remote for bd sync
+	Prefix string `json:"prefix"` // issue prefix (e.g., "gt")
 }
 
 // CurrentRigConfigVersion is the current schema version.

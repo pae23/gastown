@@ -165,7 +165,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	d.Register(doctor.NewStaleBeadsRedirectCheck())
 	d.Register(doctor.NewBranchCheck())
 	d.Register(doctor.NewBeadsSyncOrphanCheck())
-	d.Register(doctor.NewBeadsSyncWorktreeCheck())
 	d.Register(doctor.NewCloneDivergenceCheck())
 	d.Register(doctor.NewDefaultBranchAllRigsCheck())
 	d.Register(doctor.NewIdentityCollisionCheck())
@@ -215,7 +214,6 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	d.Register(doctor.NewHookAttachmentValidCheck())
 	d.Register(doctor.NewHookSingletonCheck())
 	d.Register(doctor.NewOrphanedAttachmentsCheck())
-	d.Register(doctor.NewDoltHooksCheck())
 
 	// Hooks sync check
 	d.Register(doctor.NewHooksSyncCheck())

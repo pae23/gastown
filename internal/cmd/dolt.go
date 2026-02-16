@@ -768,17 +768,6 @@ func runDoltMigrate(cmd *cobra.Command, args []string) error {
 		state, _ := doltserver.LoadState(townRoot)
 		fmt.Printf("%s Dolt server started (PID %d)\n", style.Bold.Render("✓"), state.PID)
 
-		// Set sync.mode=dolt-native in each rig's database BEFORE verification.
-		// ShouldExportJSONL reads sync.mode from the DB (not config.yaml) to decide
-		// whether to export JSONL. Without this, every bd write pays a 10-25s JSONL
-		// export penalty even though the rig is configured for dolt-native in yaml.
-		// This must run unconditionally — even if verification fails, we don't want
-		// to leave the user with the JSONL penalty on top of missing-DB issues.
-		setSyncModeErrs := setSyncModeForAllRigs(townRoot)
-		for _, err := range setSyncModeErrs {
-			fmt.Printf("  %s sync.mode set failed: %v\n", style.Dim.Render("⚠"), err)
-		}
-
 		// Verify the server is actually serving all databases that exist on disk.
 		// Dolt silently skips databases with stale manifests after migration,
 		// so filesystem discovery and SQL discovery can diverge.
@@ -847,13 +836,6 @@ func runDoltFixMetadata(cmd *cobra.Command, args []string) error {
 
 	if len(updated) == 0 && len(errs) == 0 {
 		fmt.Println("No rig databases found. Nothing to update.")
-	}
-
-	// Also ensure sync.mode=dolt-native is set in each rig's database.
-	// This prevents the 10-25s JSONL export penalty on every bd write.
-	syncErrs := setSyncModeForAllRigs(townRoot)
-	for _, syncErr := range syncErrs {
-		fmt.Printf("  %s sync.mode set failed: %v\n", style.Dim.Render("⚠"), syncErr)
 	}
 
 	return nil
@@ -1143,42 +1125,4 @@ func runDoltSync(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// setSyncModeForAllRigs sets sync.mode=dolt-native in each rig's beads database.
-// This is critical because ShouldExportJSONL reads sync.mode from the DB (not config.yaml).
-// Without this, every bd write triggers a full JSONL export (10-25s penalty).
-func setSyncModeForAllRigs(townRoot string) []error {
-	databases, err := doltserver.ListDatabases(townRoot)
-	if err != nil {
-		return []error{fmt.Errorf("listing databases: %w", err)}
-	}
-
-	var errs []error
-	var set []string
-	for _, dbName := range databases {
-		// Use FindOrCreateRigBeadsDir to atomically resolve and ensure the
-		// directory exists, avoiding TOCTOU races in the stat-then-use pattern.
-		beadsDir, err := doltserver.FindOrCreateRigBeadsDir(townRoot, dbName)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: resolving beads dir: %w", dbName, err))
-			continue
-		}
-
-		cmd := exec.Command("bd", "sync", "mode", "set", "dolt-native")
-		cmd.Dir = filepath.Dir(beadsDir) // run from parent of .beads
-		cmd.Env = append(os.Environ(), "BEADS_DIR="+beadsDir)
-
-		if output, err := cmd.CombinedOutput(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %v (%s)", dbName, err, strings.TrimSpace(string(output))))
-		} else {
-			set = append(set, dbName)
-		}
-	}
-
-	if len(set) > 0 {
-		fmt.Printf("%s Set sync.mode=dolt-native in DB for: %s\n",
-			style.Bold.Render("✓"), strings.Join(set, ", "))
-	}
-
-	return errs
-}
 

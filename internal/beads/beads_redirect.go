@@ -111,20 +111,14 @@ func cleanBeadsRuntimeFiles(beadsDir string) error {
 
 	// Runtime files/patterns that are gitignored and safe to remove
 	runtimePatterns := []string{
-		// Legacy SQLite database files (pre-Dolt migration)
-		"*.db", "*.db-*", "*.db?*",
 		// Daemon runtime
 		"daemon.lock", "daemon.log", "daemon.pid", "bd.sock",
 		// Sync state
-		"sync-state.json", "last-touched", "metadata.json",
+		"last-touched", "metadata.json",
 		// Version tracking
 		".local_version",
 		// Redirect file (we're about to recreate it)
 		"redirect",
-		// Merge artifacts
-		"beads.base.*", "beads.left.*", "beads.right.*",
-		// JSONL files (tracked but will be redirected, safe to remove in worktrees)
-		"issues.jsonl", "interactions.jsonl",
 		// Runtime directories
 		"mq",
 	}
