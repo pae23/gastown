@@ -188,6 +188,8 @@ func DefaultConfig(townRoot string) *Config {
 	if envPort := os.Getenv("GT_DOLT_PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
 			port = p
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: invalid GT_DOLT_PORT=%q, using default %d\n", envPort, DefaultPort)
 		}
 	}
 	user := DefaultUser
@@ -212,7 +214,7 @@ func DefaultConfig(townRoot string) *Config {
 // (i.e., not localhost). When remote, dolt CLI commands need explicit
 // connection flags instead of relying on data-directory auto-detection.
 func (c *Config) IsRemote() bool {
-	return c.Host != "127.0.0.1" && c.Host != "localhost" && c.Host != ""
+	return c.Host != "127.0.0.1" && c.Host != "::1" && c.Host != "localhost" && c.Host != ""
 }
 
 // SQLArgs returns the base dolt sql arguments with connection flags
@@ -297,11 +299,23 @@ func SaveState(townRoot string, state *State) error {
 
 // IsRunning checks if a Dolt server is running for the given town.
 // Returns (running, pid, error).
-// Checks both PID file AND port to detect externally-started servers.
+// For local servers, checks both PID file AND port to detect externally-started servers.
+// For remote servers, checks TCP reachability (PID/lsof are not available remotely).
 func IsRunning(townRoot string) (bool, int, error) {
 	config := DefaultConfig(townRoot)
 
-	// First check PID file
+	// Remote server: we can't inspect processes, so check TCP reachability.
+	if config.IsRemote() {
+		addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		if err != nil {
+			return false, 0, nil
+		}
+		_ = conn.Close()
+		return true, 0, nil
+	}
+
+	// Local server: check PID file first
 	data, err := os.ReadFile(config.PidFile)
 	if err == nil {
 		pidStr := strings.TrimSpace(string(data))
@@ -339,7 +353,7 @@ func IsRunning(townRoot string) (bool, int, error) {
 // Returns nil if reachable, error describing the problem otherwise.
 func CheckServerReachable(townRoot string) error {
 	config := DefaultConfig(townRoot)
-	addr := fmt.Sprintf("127.0.0.1:%d", config.Port)
+	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("Dolt server not reachable at %s: %w\n\nStart with: gt dolt start", addr, err)
@@ -442,8 +456,13 @@ func isDoltProcess(pid int) bool {
 }
 
 // Start starts the Dolt SQL server.
+// Cannot start a remote server — only the remote host can do that.
 func Start(townRoot string) error {
 	config := DefaultConfig(townRoot)
+
+	if config.IsRemote() {
+		return fmt.Errorf("cannot start a remote Dolt server (GT_DOLT_HOST=%s); start it on the remote host", config.Host)
+	}
 
 	// Ensure daemon directory exists
 	daemonDir := filepath.Dir(config.LogFile)
@@ -612,8 +631,13 @@ func cleanupStaleDoltLock(databaseDir string) error {
 
 // Stop stops the Dolt SQL server.
 // Works for both servers started via gt dolt start AND externally-started servers.
+// Cannot stop a remote server — only the remote host can do that.
 func Stop(townRoot string) error {
 	config := DefaultConfig(townRoot)
+
+	if config.IsRemote() {
+		return fmt.Errorf("cannot stop a remote Dolt server (GT_DOLT_HOST=%s); stop it on the remote host", config.Host)
+	}
 
 	running, pid, err := IsRunning(townRoot)
 	if err != nil {
@@ -683,6 +707,16 @@ func (c *Config) userDSN() string {
 		return c.User + ":" + c.Password
 	}
 	return c.User
+}
+
+// GetConnectionStringRedacted returns the DSN with the password masked.
+// Safe for logging and display to users.
+func GetConnectionStringRedacted(townRoot string) string {
+	config := DefaultConfig(townRoot)
+	if config.Password != "" {
+		return fmt.Sprintf("%s:***@tcp(%s:%d)/", config.User, config.Host, config.Port)
+	}
+	return fmt.Sprintf("%s@tcp(%s:%d)/", config.User, config.Host, config.Port)
 }
 
 // ListDatabases returns the list of available rig databases in the data directory.
@@ -763,11 +797,12 @@ func verifyDatabasesWithRetry(townRoot string, maxAttempts int) (served, missing
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		cmd := exec.CommandContext(ctx, "dolt", "sql",
-			"-r", "json",
-			"-q", "SHOW DATABASES",
-		)
-		cmd.Dir = config.DataDir
+		args := append([]string{"sql"}, config.SQLArgs()...)
+		args = append(args, "-r", "json", "-q", "SHOW DATABASES")
+		cmd := exec.CommandContext(ctx, "dolt", args...)
+		if !config.IsRemote() {
+			cmd.Dir = config.DataDir
+		}
 
 		// Capture stderr separately so it doesn't corrupt JSON parsing.
 		// Dolt commonly writes deprecation/manifest warnings to stderr.
@@ -1737,8 +1772,12 @@ func CheckReadOnly(townRoot string) (bool, error) {
 		"USE `%s`; CREATE TABLE IF NOT EXISTS `__gt_health_probe` (v INT PRIMARY KEY); REPLACE INTO `__gt_health_probe` VALUES (1); DROP TABLE IF EXISTS `__gt_health_probe`",
 		db,
 	)
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-q", query)
-	cmd.Dir = config.DataDir
+	args := append([]string{"sql"}, config.SQLArgs()...)
+	args = append(args, "-q", query)
+	cmd := exec.CommandContext(ctx, "dolt", args...)
+	if !config.IsRemote() {
+		cmd.Dir = config.DataDir
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1855,8 +1894,12 @@ func MeasureQueryLatency(townRoot string) (time.Duration, error) {
 	config := DefaultConfig(townRoot)
 
 	start := time.Now()
-	cmd := exec.Command("dolt", "sql", "-q", "SELECT 1")
-	cmd.Dir = config.DataDir
+	args := append([]string{"sql"}, config.SQLArgs()...)
+	args = append(args, "-q", "SELECT 1")
+	cmd := exec.Command("dolt", args...)
+	if !config.IsRemote() {
+		cmd.Dir = config.DataDir
+	}
 	output, err := cmd.CombinedOutput()
 	elapsed := time.Since(start)
 
@@ -1940,8 +1983,12 @@ func serverExecSQL(townRoot, query string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "dolt", "sql", "-q", query)
-	cmd.Dir = config.DataDir
+	args := append([]string{"sql"}, config.SQLArgs()...)
+	args = append(args, "-q", query)
+	cmd := exec.CommandContext(ctx, "dolt", args...)
+	if !config.IsRemote() {
+		cmd.Dir = config.DataDir
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w (output: %s)", err, strings.TrimSpace(string(output)))

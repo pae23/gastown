@@ -299,7 +299,7 @@ func runDoltStart(cmd *cobra.Command, args []string) error {
 		style.Bold.Render("✓"), state.PID, config.Port)
 	fmt.Printf("  Data dir: %s\n", state.DataDir)
 	fmt.Printf("  Databases: %s\n", style.Dim.Render(strings.Join(state.Databases, ", ")))
-	fmt.Printf("  Connection: %s\n", style.Dim.Render(doltserver.GetConnectionString(townRoot)))
+	fmt.Printf("  Connection: %s\n", style.Dim.Render(doltserver.GetConnectionStringRedacted(townRoot)))
 
 	// Verify all filesystem databases are actually served by the SQL server.
 	// Use retry since Start() only waits 500ms — DBs may still be loading.
@@ -368,7 +368,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 					fmt.Printf("    - %s\n", db)
 				}
 			}
-			fmt.Printf("  Connection: %s\n", doltserver.GetConnectionString(townRoot))
+			fmt.Printf("  Connection: %s\n", doltserver.GetConnectionStringRedacted(townRoot))
 		}
 
 		// Resource metrics
@@ -478,14 +478,18 @@ func runDoltSQL(cmd *cobra.Command, args []string) error {
 	if running {
 		// Connect to running server using dolt sql client
 		// Using --no-tls since local server doesn't have TLS configured
-		sqlCmd := exec.Command("dolt",
-			"--host", "127.0.0.1",
+		args := []string{
+			"--host", config.Host,
 			"--port", strconv.Itoa(config.Port),
 			"--user", config.User,
-			"--password", "",
-			"--no-tls",
-			"sql",
-		)
+		}
+		if config.Password != "" {
+			args = append(args, "--password", config.Password)
+		} else {
+			args = append(args, "--password", "")
+		}
+		args = append(args, "--no-tls", "sql")
+		sqlCmd := exec.Command("dolt", args...)
 		sqlCmd.Stdin = os.Stdin
 		sqlCmd.Stdout = os.Stdout
 		sqlCmd.Stderr = os.Stderr

@@ -1949,6 +1949,7 @@ func TestGetConnectionString(t *testing.T) {
 	t.Setenv("GT_DOLT_HOST", "")
 	t.Setenv("GT_DOLT_PORT", "")
 	t.Setenv("GT_DOLT_USER", "")
+	t.Setenv("GT_DOLT_PASSWORD", "")
 
 	townRoot := t.TempDir()
 	s := GetConnectionString(townRoot)
@@ -1961,11 +1962,39 @@ func TestGetConnectionStringForRig(t *testing.T) {
 	t.Setenv("GT_DOLT_HOST", "")
 	t.Setenv("GT_DOLT_PORT", "")
 	t.Setenv("GT_DOLT_USER", "")
+	t.Setenv("GT_DOLT_PASSWORD", "")
 
 	townRoot := t.TempDir()
 	s := GetConnectionStringForRig(townRoot, "hq")
 	if s != "root@tcp(127.0.0.1:3307)/hq" {
 		t.Errorf("got %q, want root@tcp(127.0.0.1:3307)/hq", s)
+	}
+}
+
+func TestGetConnectionStringRedacted(t *testing.T) {
+	// Without password
+	t.Setenv("GT_DOLT_HOST", "")
+	t.Setenv("GT_DOLT_PORT", "")
+	t.Setenv("GT_DOLT_USER", "")
+	t.Setenv("GT_DOLT_PASSWORD", "")
+
+	townRoot := t.TempDir()
+	s := GetConnectionStringRedacted(townRoot)
+	if s != "root@tcp(127.0.0.1:3307)/" {
+		t.Errorf("got %q, want root@tcp(127.0.0.1:3307)/", s)
+	}
+
+	// With password: should be masked
+	t.Setenv("GT_DOLT_HOST", "dolt-server")
+	t.Setenv("GT_DOLT_USER", "admin")
+	t.Setenv("GT_DOLT_PASSWORD", "supersecret")
+
+	s = GetConnectionStringRedacted(townRoot)
+	if s != "admin:***@tcp(dolt-server:3307)/" {
+		t.Errorf("got %q, want admin:***@tcp(dolt-server:3307)/", s)
+	}
+	if strings.Contains(s, "supersecret") {
+		t.Error("redacted string should not contain the actual password")
 	}
 }
 
@@ -2013,6 +2042,7 @@ func TestConfigIsRemote(t *testing.T) {
 		remote bool
 	}{
 		{"127.0.0.1", false},
+		{"::1", false},
 		{"localhost", false},
 		{"", false},
 		{"dolt", true},
