@@ -25,7 +25,7 @@ A comprehensive catalog of all cleanup-related commands in the gastown/beads eco
 | `gt polecat stale <rig>` | Detects stale polecats; `--cleanup` auto-nukes them |
 | `gt polecat check-recovery` | Pre-nuke safety check (SAFE_TO_NUKE vs NEEDS_RECOVERY) |
 | `gt polecat identity remove <rig> <name>` | Removes a polecat identity |
-| `gt done` | Polecat self-cleaning: pushes branch, submits MR, self-nukes worktree, kills own session |
+| `gt done` | Polecat self-cleaning: pushes branch, submits MR (by default), self-nukes worktree, kills own session. MR skipped for `--status ESCALATED\|DEFERRED` or `no_merge` paths |
 
 ## Git Artifact Cleanup
 
@@ -56,7 +56,7 @@ A comprehensive catalog of all cleanup-related commands in the gastown/beads eco
 | `gt down --polecats` | Also stops all polecat sessions |
 | `gt down --all` | Full shutdown with orphan cleanup and verification |
 | `gt down --nuke` | Kills entire tmux server (DESTRUCTIVE - kills non-GT sessions too) |
-| `gt shutdown` | "Done for the day" - stops agents AND removes polecat worktrees/branches |
+| `gt shutdown` | "Done for the day" - stops agents AND removes polecat worktrees/branches. Flags control aggressiveness (`--graceful`, `--force`, `--nuclear`, `--polecats-only`, etc.) |
 
 ## Crew Workspace Cleanup
 
@@ -146,13 +146,13 @@ A comprehensive catalog of all cleanup-related commands in the gastown/beads eco
 
 | Function | Where | What it does |
 |----------|-------|-------------|
-| `cleanupOrphanedProcesses()` | `polecat.go:1276` | Auto-runs after nuke/stale cleanup |
-| `selfNukePolecat()` | `done.go:1279` | Self-destructs worktree during `gt done` |
-| `selfKillSession()` | `done.go:116` | Self-terminates tmux session |
-| `rollbackSlingArtifacts()` | `sling.go:672` | Cleans up partial sling failures |
-| `cleanStaleHookedBeads()` | `unsling.go:250` | Repairs beads stuck in "hooked" state |
-| `gt signal stop` | `signal_stop.go:24` | Clears stop-state temp files at turn boundaries |
-| `make install` | `Makefile:41-52` | Removes stale `~/go/bin/gt` and `~/bin/gt` binaries |
+| `cleanupOrphanedProcesses()` | `polecat.go` | Auto-runs after nuke/stale cleanup |
+| `selfNukePolecat()` | `done.go` | Self-destructs worktree during `gt done` |
+| `selfKillSession()` | `done.go` | Self-terminates tmux session |
+| `rollbackSlingArtifacts()` | `sling.go` | Cleans up partial sling failures |
+| `cleanStaleHookedBeads()` | `unsling.go` | Repairs beads stuck in "hooked" state |
+| `gt signal stop` | `signal_stop.go` | Clears stop-state temp files at turn boundaries |
+| `make install` | `Makefile` | Removes stale `~/go/bin/gt` and `~/bin/gt` binaries |
 
 ---
 
