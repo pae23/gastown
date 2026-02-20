@@ -124,9 +124,12 @@ func (c *EnvVarsCheck) Run(ctx *CheckContext) *CheckResult {
 		// Compare each expected var
 		for key, expectedVal := range expected {
 			actualVal, exists := actual[key]
-			if !exists {
+			if !exists && expectedVal != "" {
+				// Only flag missing vars when the expected value is non-empty.
+				// An absent var has the same effect as an empty one (e.g. CLAUDECODE=""
+				// prevents nested session detection, but so does CLAUDECODE being unset).
 				mismatches = append(mismatches, fmt.Sprintf("%s: missing %s (expected %q)", sess, key, expectedVal))
-			} else if actualVal != expectedVal {
+			} else if exists && actualVal != expectedVal {
 				mismatches = append(mismatches, fmt.Sprintf("%s: %s=%q (expected %q)", sess, key, actualVal, expectedVal))
 			}
 		}

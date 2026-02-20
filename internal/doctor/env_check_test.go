@@ -385,6 +385,38 @@ func TestEnvVarsCheck_BootCorrect(t *testing.T) {
 	}
 }
 
+func TestEnvVarsCheck_MissingEmptyExpectedIsOK(t *testing.T) {
+	setupEnvTestRegistry(t)
+	// When expected value is "" and the key is absent from tmux env,
+	// it should NOT be flagged as a mismatch. Absent == empty for
+	// clearing vars like CLAUDECODE.
+	expected := expectedEnv("crew", "myrig", "worker1")
+
+	// Build actual env with all non-empty expected vars, but omit empty ones
+	actual := make(map[string]string)
+	for k, v := range expected {
+		if v != "" {
+			actual[k] = v
+		}
+	}
+
+	reader := &mockEnvReader{
+		sessions: []string{"mr-crew-worker1"},
+		sessionEnvs: map[string]map[string]string{
+			"mr-crew-worker1": actual,
+		},
+	}
+	check := NewEnvVarsCheckWithReader(reader)
+	result := check.Run(testCtx())
+
+	if result.Status != StatusOK {
+		t.Errorf("Status = %v, want StatusOK; absent empty-expected vars should not mismatch", result.Status)
+		if result.Details != nil {
+			t.Errorf("Details: %v", result.Details)
+		}
+	}
+}
+
 func TestEnvVarsCheck_BeadsDirWarning(t *testing.T) {
 	setupEnvTestRegistry(t)
 	// BEADS_DIR being set breaks prefix-based routing
