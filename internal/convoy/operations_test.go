@@ -70,10 +70,12 @@ func TestIsSlingableType(t *testing.T) {
 }
 
 func TestIsIssueBlocked_NoStore(t *testing.T) {
-	// isIssueBlocked with a nil context and missing store should not panic.
-	// It can't actually be tested with nil store since it calls store methods,
-	// but we verify the function signature is correct by calling it.
-	// The actual blocking behavior is tested in integration tests.
+	// isIssueBlocked with nil store should fail-open (return false, not panic).
+	// This covers the "store unavailable" failure mode (F-17).
+	result := isIssueBlocked(context.Background(), nil, "test-any-id")
+	if result {
+		t.Error("isIssueBlocked should fail-open (return false) with nil store")
+	}
 }
 
 func TestReadyIssueFilterLogic_SkipsNonSlingableTypes(t *testing.T) {
@@ -263,12 +265,6 @@ func TestIsIssueBlocked_BlockedByOpenBlocker(t *testing.T) {
 		t.Fatalf("AddDependency: %v", err)
 	}
 
-	// GetDependenciesWithMetadata may not work in embedded Dolt mode
-	// (nested query limitation). If it fails, isIssueBlocked returns false
-	// (fail-open). We test for the correct result when the store works,
-	// and accept fail-open when it doesn't.
-	result := isIssueBlocked(ctx, store, blocked.ID)
-
 	// Verify the dependency actually exists via a method that works in embedded mode.
 	deps, err := store.GetDependencies(ctx, blocked.ID)
 	if err != nil {
@@ -278,10 +274,19 @@ func TestIsIssueBlocked_BlockedByOpenBlocker(t *testing.T) {
 		t.Fatal("expected at least 1 dependency to be created")
 	}
 
-	// If GetDependenciesWithMetadata works, result should be true.
-	// If it fails (embedded Dolt nested query issue), result is false (fail-open).
-	// We can't distinguish, but we log for visibility.
-	t.Logf("isIssueBlocked(blocked with open blocker) = %v", result)
+	result := isIssueBlocked(ctx, store, blocked.ID)
+
+	// GetDependenciesWithMetadata may not work in embedded Dolt mode
+	// (nested query limitation). If it fails, isIssueBlocked returns false
+	// (fail-open). Skip the assertion in that case rather than silently passing.
+	if !result {
+		// Check if the fail-open case: GetDependenciesWithMetadata may have failed
+		_, metaErr := store.GetDependenciesWithMetadata(ctx, blocked.ID)
+		if metaErr != nil {
+			t.Skipf("GetDependenciesWithMetadata not supported in embedded mode: %v — fail-open expected", metaErr)
+		}
+		t.Error("isIssueBlocked should return true when issue has open blocker")
+	}
 }
 
 func TestIsIssueBlocked_NotBlockedByClosedBlocker(t *testing.T) {

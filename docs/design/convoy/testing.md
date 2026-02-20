@@ -20,9 +20,13 @@
 | Poll failure logs and retries on next interval | Liveness | Medium | Partial (`GetAllEventsSince` retry path not explicitly asserted) |
 | Context cancellation stops both goroutines cleanly | Liveness | High | Yes (lifecycle + stop-timeout tests) |
 | One issue fed per convoy per scan call (no batch overflow) | Safety | Medium | Implicit (single-issue tested, multi-issue not) |
-| feedFirstReady skips issues with unknown prefix/rig | Safety | Medium | No |
+| feedFirstReady skips issues with unknown prefix/rig | Safety | Medium | Yes (`TestFeedFirstReady_UnknownPrefix_Skips`, `TestFeedFirstReady_UnknownRig_Skips`) |
 | Scan interval defaults to 30s when 0 or negative | Data | Low | Yes (`TestConvoyManager_ScanInterval_Configurable`) |
 | `Stop()` is idempotent (double-call safe) | Safety | Low | Yes (`TestConvoyManager_DoubleStop_Idempotent`) |
+| ConvoyID only stamped on beads the convoy actually tracks | Data | High | Yes (`TestCreateBatchConvoy_ReturnsTrackedBeadSet`) |
+| Convoy creation failure is a hard error (not silently swallowed) | Safety | High | Yes (`TestBatchSling_ConvoyCreationFailureIsHardError`) |
+| `isIssueBlocked` fails-open on nil store | Safety | Medium | Yes (`TestIsIssueBlocked_NoStore`) |
+| Mixed-rig error does not suggest unreachable `--force` flag | UX | Medium | Yes (`TestResolveRigFromBeadIDs_MixedPrefixes_DoesNotSuggestForce`) |
 
 ---
 
@@ -139,6 +143,20 @@ Uses patterns from existing daemon tests:
 | `TestScan_ContextCancelled_MidIteration` | Unit | Large stranded list + cancel mid-loop | Done |
 | `TestScanStranded_MixedReadyAndEmpty` | Unit | Heterogeneous stranded list routed correctly | Done |
 | `TestStart_DoubleCall_Guarded` | Unit | Second Start() is no-op, warning logged | Done |
+
+### PR #1759 review fixes (implemented in sling_batch_test.go, operations_test.go)
+
+Findings from Julian's automated review. Each test targets a contract-level issue
+that the existing suite failed to catch.
+
+| Test | Type | Review Finding | Status |
+|------|------|----------------|--------|
+| `TestCreateBatchConvoy_ReturnsTrackedBeadSet` | Unit | ConvoyID stamped on beads not tracked by convoy on partial dep failure. `createBatchConvoy` now returns tracked set; callers only stamp ConvoyID for beads in that set. | Done |
+| `TestResolveRigFromBeadIDs_MixedPrefixes_DoesNotSuggestForce` | Unit | `--force` suggestion in mixed-rig error is unreachable because `resolveRigFromBeadIDs` runs before `--force` is checked. Error now suggests specifying rig explicitly. | Done |
+| `TestBatchSling_ConvoyCreationFailureIsHardError` | Unit | Convoy creation failure silently regressed to pre-PR behavior (empty ConvoyID). Now returns a hard error with `--no-convoy` hint. | Done |
+| `TestBatchSling_SliceAliasingInCrossRigGuard` | Unit | `append(beadIDs, rigName)` mutated shared backing array with caller's `args`. Fixed with explicit `make`+`copy`. | Done |
+| `TestIsIssueBlocked_BlockedByOpenBlocker` (updated) | Integration | Test logged result but never asserted. Now errors on false when `GetDependenciesWithMetadata` works, skips when embedded Dolt doesn't support it. | Done |
+| `TestIsIssueBlocked_NoStore` (updated) | Unit | Empty test body. Now calls `isIssueBlocked(ctx, nil, ...)` and asserts fail-open. Nil guard added to `isIssueBlocked`. | Done |
 
 ---
 

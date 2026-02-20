@@ -167,6 +167,9 @@ var blockingDepTypes = map[string]bool{
 // issues, the blocking issue's status may be stale (see Discovery #11 in
 // convoy-lifecycle.md). This is a known limitation.
 func isIssueBlocked(ctx context.Context, store beadsdk.Storage, issueID string) bool {
+	if store == nil {
+		return false // fail-open: no store means we can't check deps
+	}
 	deps, err := store.GetDependenciesWithMetadata(ctx, issueID)
 	if err != nil {
 		return false // On error, assume not blocked (fail-open)

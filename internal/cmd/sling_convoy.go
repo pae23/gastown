@@ -302,16 +302,19 @@ func printConvoyConflict(beadID, convoyID string) {
 }
 
 // createBatchConvoy creates a single auto-convoy that tracks all beads in a batch sling.
-// Returns the convoy ID. If owned is true, the convoy is marked with gt:owned label.
+// Returns the convoy ID and the list of bead IDs that were successfully tracked.
+// Callers should only stamp ConvoyID on beads in the tracked set — a bead whose
+// dep add failed should not reference a convoy that has no knowledge of it.
+// If owned is true, the convoy is marked with gt:owned label.
 // beadIDs must be non-empty. The convoy title uses the rig name and bead count.
-func createBatchConvoy(beadIDs []string, rigName string, owned bool, mergeStrategy string) (string, error) {
+func createBatchConvoy(beadIDs []string, rigName string, owned bool, mergeStrategy string) (string, []string, error) {
 	if len(beadIDs) == 0 {
-		return "", fmt.Errorf("no beads to track")
+		return "", nil, fmt.Errorf("no beads to track")
 	}
 
 	townRoot, err := workspace.FindFromCwd()
 	if err != nil {
-		return "", fmt.Errorf("finding town root: %w", err)
+		return "", nil, fmt.Errorf("finding town root: %w", err)
 	}
 
 	townBeads := filepath.Join(townRoot, ".beads")
@@ -343,10 +346,11 @@ func createBatchConvoy(beadIDs []string, rigName string, owned bool, mergeStrate
 	createCmd.Stderr = os.Stderr
 
 	if err := createCmd.Run(); err != nil {
-		return "", fmt.Errorf("creating batch convoy: %w", err)
+		return "", nil, fmt.Errorf("creating batch convoy: %w", err)
 	}
 
-	// Add tracking relations for all beads
+	// Add tracking relations for all beads, recording which succeed.
+	var tracked []string
 	for _, beadID := range beadIDs {
 		depArgs := []string{"dep", "add", convoyID, beadID, "--type=tracks"}
 		depCmd := exec.Command("bd", depArgs...)
@@ -356,10 +360,12 @@ func createBatchConvoy(beadIDs []string, rigName string, owned bool, mergeStrate
 		if err := depCmd.Run(); err != nil {
 			// Log but continue — partial tracking is better than no tracking
 			fmt.Printf("  Warning: could not track %s in convoy: %v\n", beadID, err)
+		} else {
+			tracked = append(tracked, beadID)
 		}
 	}
 
-	return convoyID, nil
+	return convoyID, tracked, nil
 }
 
 // createAutoConvoy creates an auto-convoy for a single issue and tracks it.

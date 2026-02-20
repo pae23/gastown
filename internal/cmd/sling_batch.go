@@ -41,6 +41,11 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 						others = append(others, id)
 					}
 				}
+				// Build the full command suggestion safely — avoid appending to
+				// beadIDs which may share a backing array with the caller's args.
+				allArgs := make([]string, len(beadIDs)+1)
+				copy(allArgs, beadIDs)
+				allArgs[len(beadIDs)] = rigName
 				return fmt.Errorf("bead %s (prefix %q) belongs to rig %q, but target is %q\n\n"+
 					"  Options:\n"+
 					"    1. Remove the mismatched bead from this batch:\n"+
@@ -52,7 +57,7 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 					beadID, strings.TrimSuffix(prefix, "-"), beadRig, rigName,
 					strings.Join(others, " "),
 					beadID, beadRig,
-					strings.Join(append(beadIDs, rigName), " "))
+					strings.Join(allArgs, " "))
 			} else if err := checkCrossRigGuard(beadID, rigName+"/polecats/_", townRoot); err != nil {
 				// Fall back to generic guard for edge cases (empty prefix, town-level beads)
 				return err
@@ -94,6 +99,7 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 	// Create a single convoy tracking all beads before spawning polecats.
 	// If any bead is already tracked by another convoy, error with details.
 	var batchConvoyID string
+	trackedByConvoy := make(map[string]bool) // beads successfully tracked in convoy
 	if !slingNoConvoy {
 		for _, beadID := range beadIDs {
 			if existing := isTrackedByConvoy(beadID); existing != "" {
@@ -101,13 +107,15 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 				return fmt.Errorf("cannot create batch convoy: %s is already tracked by convoy %s", beadID, existing)
 			}
 		}
-		convoyID, err := createBatchConvoy(beadIDs, rigName, slingOwned, slingMerge)
+		convoyID, tracked, err := createBatchConvoy(beadIDs, rigName, slingOwned, slingMerge)
 		if err != nil {
-			fmt.Printf("  %s Could not create batch convoy: %v\n", style.Dim.Render("Warning:"), err)
-		} else {
-			batchConvoyID = convoyID
-			fmt.Printf("  %s Created convoy 🚚 %s tracking %d beads\n", style.Bold.Render("→"), convoyID, len(beadIDs))
+			return fmt.Errorf("batch convoy creation failed: %w\n\n  Use --no-convoy to skip convoy tracking and sling beads directly.", err)
 		}
+		batchConvoyID = convoyID
+		for _, id := range tracked {
+			trackedByConvoy[id] = true
+		}
+		fmt.Printf("  %s Created convoy 🚚 %s tracking %d beads\n", style.Bold.Render("→"), convoyID, len(tracked))
 	}
 
 	// Spawn a polecat for each bead and sling it
@@ -251,12 +259,20 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 		// Store all attachment fields in a single read-modify-write cycle.
 		// This eliminates the race condition where sequential independent updates
 		// could overwrite each other under concurrent access.
+		//
+		// Only stamp ConvoyID on beads that the convoy actually tracks.
+		// A bead whose dep add failed should not reference a convoy that
+		// has no knowledge of it (review fix: partial dep failure).
+		convoyIDForBead := ""
+		if trackedByConvoy[beadID] {
+			convoyIDForBead = batchConvoyID
+		}
 		fieldUpdates := beadFieldUpdates{
 			Dispatcher:       actor,
 			Args:             slingArgs,
 			AttachedMolecule: attachedMoleculeID,
 			NoMerge:          slingNoMerge,
-			ConvoyID:         batchConvoyID,
+			ConvoyID:         convoyIDForBead,
 			MergeStrategy:    slingMerge,
 		}
 		// Use beadToHook for the update target (may differ from beadID when formula-on-bead)
@@ -422,8 +438,8 @@ func resolveRigFromBeadIDs(beadIDs []string, townRoot string) (string, error) {
 				"    1. Sling each rig's beads separately:\n"+
 				"         gt sling <bead1> <bead2> ...   (beads for %s)\n"+
 				"         gt sling <bead3> <bead4> ...   (beads for %s)\n"+
-				"    2. Use --force to override the cross-rig guard:\n"+
-				"         gt sling %s --force\n",
+				"    2. Specify the target rig explicitly:\n"+
+				"         gt sling %s <rig>\n",
 				strings.Join(mismatches, "\n"),
 				resolvedRig, rigName,
 				strings.Join(beadIDs, " "))
