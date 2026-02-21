@@ -948,7 +948,7 @@ func runDeaconPending(cmd *cobra.Command, args []string) error {
 	}
 
 	// No args: list pending spawns with captured output
-	// First, prune stale pending spawns (>5 min old with dead sessions)
+	// First, prune stale pending spawns older than 5 minutes
 	pruned, err := polecat.PruneStalePending(townRoot, 5*time.Minute)
 	if err != nil {
 		// Non-fatal: log and continue

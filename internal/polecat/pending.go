@@ -227,7 +227,11 @@ func pruneStalePendingFromList(pending []*PendingSpawn, maxAge time.Duration) (i
 				continue // Skip items with nil mailbox
 			}
 			if err := ps.mailbox.Archive(ps.MailID); err != nil {
-				continue // Best-effort: skip failures, retry next patrol
+				if errors.Is(err, mail.ErrMessageNotFound) {
+					pruned++ // Already archived by concurrent path
+					continue
+				}
+				continue // Best-effort: skip other failures, retry next patrol
 			}
 			pruned++
 		}
