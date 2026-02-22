@@ -309,6 +309,11 @@ func (b *Beads) run(args ...string) (_ []byte, retErr error) {
 
 	err := cmd.Run()
 	if err != nil {
+		// bd exits non-zero when a list query returns no results (e.g. --status=pinned with no matches).
+		// An empty JSON array on stdout is a valid success response; don't treat it as an error.
+		if strings.TrimSpace(stdout.String()) == "[]" {
+			return stdout.Bytes(), nil
+		}
 		return nil, b.wrapError(err, stderr.String(), args)
 	}
 
