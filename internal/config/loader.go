@@ -1343,11 +1343,6 @@ func hasExplicitNonClaudeOverride(role string, townSettings *TownSettings, rigSe
 }
 
 func resolveRoleAgentConfigCore(role, townRoot, rigPath string) *RuntimeConfig {
-	// Dogs always use Haiku — they're lightweight watchdog/utility agents.
-	if role == "dog" {
-		return claudeHaikuPreset()
-	}
-
 	// Load rig settings (may be nil for town-level roles like mayor/deacon)
 	var rigSettings *RigSettings
 	if rigPath != "" {
@@ -1368,6 +1363,16 @@ func resolveRoleAgentConfigCore(role, townRoot, rigPath string) *RuntimeConfig {
 	_ = LoadAgentRegistry(DefaultAgentRegistryPath(townRoot))
 	if rigPath != "" {
 		_ = LoadRigAgentRegistry(RigAgentRegistryPath(rigPath))
+	}
+
+	// Dogs default to Haiku (cheap infrastructure workers), but respect
+	// explicit non-Claude overrides (e.g., RoleAgents["dog"] = "opencode").
+	if role == "dog" {
+		if hasExplicitNonClaudeOverride(role, townSettings, rigSettings) {
+			// Fall through to normal resolution below
+		} else {
+			return claudeHaikuPreset()
+		}
 	}
 
 	// Check ephemeral cost tier (GT_COST_TIER env var)
