@@ -32,6 +32,7 @@ type recorderInstruments struct {
 	promptTotal         metric.Int64Counter
 	paneReadTotal       metric.Int64Counter
 	paneOutputTotal     metric.Int64Counter
+	agentEventTotal     metric.Int64Counter
 	primeTotal         metric.Int64Counter
 	agentStateTotal    metric.Int64Counter
 	polecatTotal       metric.Int64Counter
@@ -78,6 +79,9 @@ func initInstruments() {
 		)
 		inst.paneOutputTotal, _ = m.Int64Counter("gastown.pane.output.total",
 			metric.WithDescription("Total pane output chunks emitted to VictoriaLogs"),
+		)
+		inst.agentEventTotal, _ = m.Int64Counter("gastown.agent.events.total",
+			metric.WithDescription("Total agent conversation events emitted to VictoriaLogs"),
 		)
 		inst.primeTotal, _ = m.Int64Counter("gastown.prime.total",
 			metric.WithDescription("Total gt prime invocations"),
@@ -482,5 +486,28 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 	emit(ctx, "pane.output", otellog.SeverityInfo,
 		otellog.String("session", sessionID),
 		otellog.String("content", truncateOutput(content, maxPaneOutputLog)),
+	)
+}
+
+const maxAgentEventContent = 8192
+
+// RecordAgentEvent emits a structured agent conversation event to VictoriaLogs.
+// Opt-in: only called when GT_LOG_AGENT_OUTPUT=true.
+// agentType is the adapter name ("claudecode", "opencode", …).
+// eventType is one of "text", "tool_use", "tool_result", "thinking".
+// role is "assistant" or "user".
+func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role, content string) {
+	initInstruments()
+	inst.agentEventTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("session", sessionID),
+		attribute.String("event_type", eventType),
+		attribute.String("role", role),
+	))
+	emit(ctx, "agent.event", otellog.SeverityInfo,
+		otellog.String("session", sessionID),
+		otellog.String("agent_type", agentType),
+		otellog.String("event_type", eventType),
+		otellog.String("role", role),
+		otellog.String("content", truncateOutput(content, maxAgentEventContent)),
 	)
 }
