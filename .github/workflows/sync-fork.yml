@@ -1,0 +1,49 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # Every 6 hours
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/steveyegge/gastown.git
+
+      - name: Fetch all upstream branches and tags
+        run: git fetch upstream --tags --prune
+
+      - name: Sync all branches
+        run: |
+          # Get all upstream branches
+          for branch in $(git branch -r --list 'upstream/*' | sed 's|upstream/||' | grep -v HEAD); do
+            echo "Syncing branch: $branch"
+            # Check if branch exists locally on fork
+            if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              # Branch exists - fast-forward if possible
+              git checkout "$branch" 2>/dev/null || git checkout -b "$branch" "origin/$branch"
+              if git merge-base --is-ancestor HEAD "upstream/$branch" 2>/dev/null; then
+                git reset --hard "upstream/$branch"
+                git push origin "$branch" --force-with-lease
+                echo "  ✓ Updated $branch"
+              else
+                echo "  ⚠ Skipped $branch (fork has diverged)"
+              fi
+            else
+              # New branch from upstream - create it
+              git checkout -b "$branch" "upstream/$branch"
+              git push origin "$branch"
+              echo "  ✓ Created $branch"
+            fi
+          done
+
+      - name: Sync all tags
+        run: git push origin --tags --force
