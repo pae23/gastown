@@ -100,15 +100,13 @@ func (c *BranchCheck) Fix(ctx *CheckContext) error {
 	for _, dir := range c.offMainDirs {
 		targetBranch := c.expectedBranch(ctx.TownRoot, dir)
 
-		cmd := exec.Command("git", "checkout", targetBranch) //nolint:gosec // G204: branch name from config
-		cmd.Dir = dir
-		if err := cmd.Run(); err != nil {
-			lastErr = fmt.Errorf("%s: %w", dir, err)
+		if err := c.checkoutWithWorktreeRetry(dir, targetBranch); err != nil {
+			lastErr = err
 			continue
 		}
 
 		// git pull --rebase
-		cmd = exec.Command("git", "pull", "--rebase")
+		cmd := exec.Command("git", "pull", "--rebase")
 		cmd.Dir = dir
 		if err := cmd.Run(); err != nil {
 			// Pull failure is not fatal, just warn
@@ -117,6 +115,75 @@ func (c *BranchCheck) Fix(ctx *CheckContext) error {
 	}
 
 	return lastErr
+}
+
+// checkoutWithWorktreeRetry attempts git checkout, and if it fails because the
+// branch is already checked out in another worktree (typically .repo.git), it
+// detaches that worktree's HEAD to free the branch and retries.
+func (c *BranchCheck) checkoutWithWorktreeRetry(dir, branch string) error {
+	cmd := exec.Command("git", "checkout", branch) //nolint:gosec // G204: branch name from config
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	// Check if failure is due to worktree branch conflict.
+	// Git error looks like: fatal: 'main' is already checked out at '/path/to/.repo.git'
+	conflictPath := parseWorktreeConflict(string(output))
+	if conflictPath == "" {
+		return fmt.Errorf("%s: git checkout %s failed: %s", dir, branch, strings.TrimSpace(string(output)))
+	}
+
+	// Only auto-resolve conflicts with bare repos (.repo.git).
+	// Detaching HEAD in a bare repo is safe since it has no working tree.
+	if !strings.HasSuffix(conflictPath, ".repo.git") {
+		return fmt.Errorf("%s: branch %q is already checked out at %s (not a bare repo, cannot auto-resolve)",
+			dir, branch, conflictPath)
+	}
+
+	// Detach the bare repo's HEAD to free the branch.
+	// We use checkout --detach which points HEAD at the current commit without a branch.
+	detachCmd := exec.Command("git", "-C", conflictPath, "checkout", "--detach") //nolint:gosec // G204: path from git output
+	if detachOutput, detachErr := detachCmd.CombinedOutput(); detachErr != nil {
+		return fmt.Errorf("%s: cannot detach HEAD in %s to free branch %q: %s",
+			dir, conflictPath, branch, strings.TrimSpace(string(detachOutput)))
+	}
+
+	// Retry the checkout now that the branch is freed.
+	retryCmd := exec.Command("git", "checkout", branch) //nolint:gosec // G204: branch name from config
+	retryCmd.Dir = dir
+	if retryOutput, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
+		return fmt.Errorf("%s: git checkout %s failed after detaching %s: %s",
+			dir, branch, conflictPath, strings.TrimSpace(string(retryOutput)))
+	}
+
+	return nil
+}
+
+// parseWorktreeConflict extracts the conflicting path from a git checkout error.
+// Returns empty string if the error is not a worktree branch conflict.
+// Git versions use different formats:
+//   - Older: "fatal: 'branch' is already checked out at '/path/to/repo'"
+//   - Newer: "fatal: 'branch' is already used by worktree at '/path/to/repo'"
+func parseWorktreeConflict(output string) string {
+	markers := []string{
+		"is already checked out at '",
+		"is already used by worktree at '",
+	}
+	for _, marker := range markers {
+		idx := strings.Index(output, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := output[idx+len(marker):]
+		endIdx := strings.Index(rest, "'")
+		if endIdx < 0 {
+			continue
+		}
+		return rest[:endIdx]
+	}
+	return ""
 }
 
 // expectedBranch returns the branch a persistent role directory should be on.
