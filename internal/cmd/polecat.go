@@ -1239,6 +1239,34 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 		nukeCleanupMolecules(polecatInfo.Issue, r)
 	}
 
+	// Step 2.75: Best-effort push before nuke (gt-4vr guardrail).
+	// Try to preserve any unpushed commits on the branch. If push fails,
+	// proceed — --force already means "I accept data loss".
+	if branchToDelete != "" {
+		var pushGit *git.Git
+		// Try worktree first (may still exist), then bare repo fallback
+		if polecatInfo != nil {
+			wtPath := filepath.Join(r.Path, "polecats", polecatName)
+			if _, statErr := os.Stat(wtPath); statErr == nil {
+				pushGit = git.NewGit(wtPath)
+			}
+		}
+		if pushGit == nil {
+			bareRepoPath := filepath.Join(r.Path, ".repo.git")
+			if info, statErr := os.Stat(bareRepoPath); statErr == nil && info.IsDir() {
+				pushGit = git.NewGitWithDir(bareRepoPath, "")
+			}
+		}
+		if pushGit != nil {
+			refspec := branchToDelete + ":" + branchToDelete
+			if err := pushGit.Push("origin", refspec, false); err != nil {
+				fmt.Printf("  %s best-effort push failed (proceeding): %v\n", style.Dim.Render("○"), err)
+			} else {
+				fmt.Printf("  %s pushed branch %s before nuke\n", style.Success.Render("✓"), branchToDelete)
+			}
+		}
+	}
+
 	// Step 3: Delete worktree (nuclear=true to bypass safety checks for stale polecats)
 	if err := mgr.RemoveWithOptions(polecatName, true, true, false); err != nil {
 		if errors.Is(err, polecat.ErrPolecatNotFound) {
