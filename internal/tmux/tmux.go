@@ -2365,6 +2365,23 @@ func (t *Tmux) GetSessionCreatedUnix(session string) (int64, error) {
 	return ts, nil
 }
 
+// SocketFromEnv extracts the tmux socket name from the TMUX environment variable.
+// TMUX format: /path/to/socket,server_pid,session_index
+// Returns the basename of the socket path (e.g., "default", "gt"), or empty if
+// not in tmux or the env variable is not set.
+func SocketFromEnv() string {
+	tmuxEnv := os.Getenv("TMUX")
+	if tmuxEnv == "" {
+		return ""
+	}
+	// Extract socket path (everything before first comma)
+	parts := strings.SplitN(tmuxEnv, ",", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	return filepath.Base(parts[0])
+}
+
 // CurrentSessionName returns the tmux session name for the current process.
 // It parses the TMUX environment variable (format: socket,pid,session_index)
 // and queries tmux for the session name. Returns empty string if not in tmux.

@@ -88,6 +88,15 @@ Examples:
 // sessionOverride: if non-empty, use this instead of detecting current session
 // clientOverride: if non-empty, pass as -c flag to tmux switch-client
 func cycleToSession(direction int, sessionOverride, clientOverride string) error {
+	// Override the default tmux socket to match the calling tmux server.
+	// PersistentPreRunE sets the socket to the town name (e.g., "gt"), but
+	// cycle is invoked from tmux run-shell which may be on a different socket
+	// (e.g., "default"). Without this, switch-client silently fails because
+	// the sessions aren't on the town-named socket.
+	if socketName := tmux.SocketFromEnv(); socketName != "" {
+		tmux.SetDefaultSocket(socketName)
+	}
+
 	session := sessionOverride
 	if session == "" {
 		var err error
