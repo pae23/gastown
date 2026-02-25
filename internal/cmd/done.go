@@ -209,6 +209,25 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
+	// Normalize polecat CWD: polecats may run gt done from a subdirectory (e.g.,
+	// beads-ide/ inside the repo). beads.ResolveBeadsDir only looks at cwd/.beads,
+	// not parent dirs, so we must normalize to the git repo root before use.
+	// Walk up from cwd until we find .git, stopping if we leave the polecats area.
+	if cwdAvailable && cwdIsPolecatWorktree {
+		candidate := cwd
+		for {
+			if _, statErr := os.Stat(filepath.Join(candidate, ".git")); statErr == nil {
+				cwd = candidate
+				break
+			}
+			parent := filepath.Dir(candidate)
+			if parent == candidate || !strings.Contains(parent, "/polecats/") {
+				break // hit filesystem root or left polecats area
+			}
+			candidate = parent
+		}
+	}
+
 	// Initialize git - use cwd if available, otherwise use rig's mayor clone
 	var g *git.Git
 	if cwdAvailable {
