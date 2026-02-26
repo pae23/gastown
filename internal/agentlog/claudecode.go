@@ -21,9 +21,6 @@ const (
 
 	// watchFileTimeout is how long we wait for a JSONL file to appear after startup.
 	watchFileTimeout = 30 * time.Second
-
-	// maxContentLen is the maximum bytes of content captured per event.
-	maxContentLen = 4096
 )
 
 // ClaudeCodeAdapter watches Claude Code JSONL conversation files.
@@ -231,6 +228,15 @@ type ccEntry struct {
 type ccMessage struct {
 	Role    string      `json:"role"`
 	Content []ccContent `json:"content"`
+	Usage   *ccUsage    `json:"usage,omitempty"`
+}
+
+// ccUsage holds Claude API token usage counts for an assistant turn.
+type ccUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 // ccContent is one content block inside a ccMessage.
@@ -284,12 +290,8 @@ func parseClaudeCodeLine(line, sessionID, agentType, nativeSessionID string) []A
 			content = c.Thinking
 		case "tool_use":
 			eventType = "tool_use"
-			// Log tool name + truncated JSON input as a summary.
-			inputStr := string(c.Input)
-			if len(inputStr) > 256 {
-				inputStr = inputStr[:256] + "…"
-			}
-			content = c.Name + ": " + inputStr
+			// Log tool name + full JSON input.
+			content = c.Name + ": " + string(c.Input)
 		case "tool_result":
 			eventType = "tool_result"
 			content = c.Content
@@ -298,9 +300,6 @@ func parseClaudeCodeLine(line, sessionID, agentType, nativeSessionID string) []A
 		}
 		if content == "" {
 			continue
-		}
-		if len(content) > maxContentLen {
-			content = content[:maxContentLen] + "…"
 		}
 		events = append(events, AgentEvent{
 			AgentType:       agentType,
@@ -312,5 +311,26 @@ func parseClaudeCodeLine(line, sessionID, agentType, nativeSessionID string) []A
 			Timestamp:       ts,
 		})
 	}
+
+	// Emit a dedicated "usage" event once per assistant turn so token counts
+	// are not duplicated across content blocks of the same message.
+	if entry.Type == "assistant" && entry.Message.Usage != nil {
+		u := entry.Message.Usage
+		if u.InputTokens > 0 || u.OutputTokens > 0 {
+			events = append(events, AgentEvent{
+				AgentType:           agentType,
+				SessionID:           sessionID,
+				NativeSessionID:     nativeSessionID,
+				EventType:           "usage",
+				Role:                "assistant",
+				Timestamp:           ts,
+				InputTokens:         u.InputTokens,
+				OutputTokens:        u.OutputTokens,
+				CacheReadTokens:     u.CacheReadInputTokens,
+				CacheCreationTokens: u.CacheCreationInputTokens,
+			})
+		}
+	}
+
 	return events
 }

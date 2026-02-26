@@ -17,10 +17,17 @@ type AgentEvent struct {
 	AgentType       string    // "claudecode", "opencode", …
 	SessionID       string    // Gas Town tmux session name (e.g. "hq-mayor", "gt-wyvern-toast")
 	NativeSessionID string    // agent-native session UUID (e.g. Claude Code session UUID from JSONL filename)
-	EventType       string    // "text", "tool_use", "tool_result", "thinking"
+	EventType       string    // "text", "tool_use", "tool_result", "thinking", "usage"
 	Role            string    // "assistant" or "user"
-	Content         string    // text content (may be truncated)
+	Content         string    // text content; empty for "usage" events
 	Timestamp       time.Time // original timestamp from the conversation log
+
+	// Token usage fields — non-zero only for EventType == "usage".
+	// One "usage" event is emitted per assistant turn (not per content block).
+	InputTokens         int // input_tokens from Claude API usage
+	OutputTokens        int // output_tokens from Claude API usage
+	CacheReadTokens     int // cache_read_input_tokens
+	CacheCreationTokens int // cache_creation_input_tokens
 }
 
 // AgentAdapter watches an agent's conversation log and streams normalized events.

@@ -16,6 +16,7 @@ var (
 	agentLogWorkDir   string
 	agentLogAgentType string
 	agentLogSince     string
+	agentLogRunID     string
 )
 
 var agentLogCmd = &cobra.Command{
@@ -30,6 +31,7 @@ func init() {
 	agentLogCmd.Flags().StringVar(&agentLogWorkDir, "work-dir", "", "Agent working directory (used to locate conversation log files)")
 	agentLogCmd.Flags().StringVar(&agentLogAgentType, "agent", "claudecode", "Agent type (claudecode, opencode)")
 	agentLogCmd.Flags().StringVar(&agentLogSince, "since", "", "Only watch JSONL files modified at or after this RFC3339 timestamp (filters out pre-existing Claude sessions)")
+	agentLogCmd.Flags().StringVar(&agentLogRunID, "run-id", "", "GASTA run identifier (GT_RUN); injected into every agent.event for waterfall correlation")
 	_ = agentLogCmd.MarkFlagRequired("session")
 	_ = agentLogCmd.MarkFlagRequired("work-dir")
 	rootCmd.AddCommand(agentLogCmd)
@@ -37,6 +39,13 @@ func init() {
 
 func runAgentLog(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
+	// Inject run ID into context so every RecordAgentEvent call carries run.id.
+	// Falls back to GT_RUN env var when --run-id is not provided.
+	if agentLogRunID != "" {
+		ctx = telemetry.WithRunID(ctx, agentLogRunID)
+	} else if envRunID := os.Getenv("GT_RUN"); envRunID != "" {
+		ctx = telemetry.WithRunID(ctx, envRunID)
+	}
 
 	provider, err := telemetry.Init(ctx, "gastown", "")
 	if err != nil {
@@ -73,7 +82,12 @@ func runAgentLog(cmd *cobra.Command, args []string) error {
 	}
 
 	for ev := range ch {
-		telemetry.RecordAgentEvent(ctx, ev.SessionID, ev.AgentType, ev.EventType, ev.Role, ev.Content, ev.NativeSessionID, ev.Timestamp)
+		if ev.EventType == "usage" {
+			telemetry.RecordAgentTokenUsage(ctx, ev.SessionID, ev.NativeSessionID,
+				ev.InputTokens, ev.OutputTokens, ev.CacheReadTokens, ev.CacheCreationTokens)
+		} else {
+			telemetry.RecordAgentEvent(ctx, ev.SessionID, ev.AgentType, ev.EventType, ev.Role, ev.Content, ev.NativeSessionID, ev.Timestamp)
+		}
 	}
 	return nil
 }

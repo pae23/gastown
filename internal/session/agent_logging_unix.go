@@ -23,8 +23,12 @@ import (
 // Claude instance are watched, excluding pre-existing user sessions or other
 // Gas Town rigs running in the same work directory.
 //
+// runID is the GASTA run identifier (GT_RUN) generated at session spawn time.
+// It is passed to the agent-log subprocess so every agent.event it emits
+// carries the same run.id for waterfall correlation. Pass "" to omit.
+//
 // Opt-in: caller must check GT_LOG_AGENT_OUTPUT=true before calling.
-func ActivateAgentLogging(sessionID, workDir string) error {
+func ActivateAgentLogging(sessionID, workDir, runID string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolving executable: %w", err)
@@ -43,16 +47,24 @@ func ActivateAgentLogging(sessionID, workDir string) error {
 	// filtering out older sessions from unrelated Claude instances.
 	since := time.Now().Add(-60 * time.Second).UTC().Format(time.RFC3339)
 
-	cmd := exec.Command(exe, "agent-log",
+	args := []string{"agent-log",
 		"--session", sessionID,
 		"--work-dir", workDir,
 		"--since", since,
-	)
+	}
+	if runID != "" {
+		args = append(args, "--run-id", runID)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"GT_OTEL_LOGS_URL="+logsURL,
 		"GT_OTEL_METRICS_URL="+metricsURL,
 	)
+	if runID != "" {
+		env = append(env, "GT_RUN="+runID)
+	}
+	cmd.Env = env
 	// Suppress stdio — this is a background daemon process.
 	cmd.Stdin = nil
 	cmd.Stdout = nil
