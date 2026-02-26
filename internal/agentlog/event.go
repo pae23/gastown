@@ -37,7 +37,7 @@ type AgentAdapter interface {
 	AgentType() string
 
 	// Watch starts watching and returns a channel of events.
-	// The channel is closed when ctx is cancelled or a fatal error occurs.
+	// The channel is closed when ctx is canceled or a fatal error occurs.
 	// sessionID is the Gas Town tmux session name used as a log tag.
 	// workDir is the agent's working directory (used to locate log files).
 	// since filters out JSONL files last modified before this time; use zero

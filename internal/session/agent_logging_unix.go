@@ -89,7 +89,7 @@ func agentLogPIDFile(sessionID string) string {
 }
 
 // killPreviousAgentLogger kills any previously running agent-log watcher for
-// the session by reading and signalling the stored PID file.
+// the session by reading and signaling the stored PID file.
 func killPreviousAgentLogger(pidFile string) {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {

@@ -65,7 +65,7 @@ func (a *ClaudeCodeAdapter) Watch(ctx context.Context, sessionID, workDir string
 		for {
 			jsonlPath, err := waitForNewestJSONL(ctx, projectDir, since)
 			if err != nil {
-				return // context cancelled or timeout — non-fatal
+				return // context canceled or timeout — non-fatal
 			}
 
 			currentPath = jsonlPath
@@ -157,7 +157,7 @@ func nativeSessionIDFromPath(path string) string {
 // tailJSONL reads all existing lines in path then polls for new ones, emitting
 // AgentEvents on ch. It returns (without closing ch) when:
 //   - a newer JSONL file appears in projectDir (new Claude session detected), or
-//   - ctx is cancelled.
+//   - ctx is canceled.
 //
 // Callers loop back to waitForNewestJSONL after this returns to pick up the
 // new session file. This handles Claude instances that are created and destroyed
