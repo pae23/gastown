@@ -2207,7 +2207,7 @@ type HealthMetrics struct {
 	// DiskUsageHuman is a human-readable disk usage string.
 	DiskUsageHuman string `json:"disk_usage_human"`
 
-	// QueryLatency is the time taken for a SELECT 1 round-trip.
+	// QueryLatency is the time taken for a SELECT active_branch() round-trip.
 	QueryLatency time.Duration `json:"query_latency_ms"`
 
 	// ReadOnly indicates whether the server is in read-only mode.
@@ -2233,7 +2233,7 @@ func GetHealthMetrics(townRoot string) *HealthMetrics {
 		metrics.MaxConnections = 1000 // Dolt default
 	}
 
-	// 1. Query latency: time a SELECT 1
+	// 1. Query latency: time a SELECT active_branch()
 	latency, err := MeasureQueryLatency(townRoot)
 	if err == nil {
 		metrics.QueryLatency = latency
@@ -2408,18 +2408,20 @@ func doltSQLWithRecovery(townRoot, rigDB, query string) error {
 	return nil
 }
 
-// MeasureQueryLatency times a SELECT 1 query against the Dolt server.
+// MeasureQueryLatency times a SELECT active_branch() query against the Dolt server.
+// Per Tim Sehn (Dolt CEO): active_branch() is a lightweight probe that won't block
+// behind queued queries, unlike SELECT 1 which goes through the full query executor.
 func MeasureQueryLatency(townRoot string) (time.Duration, error) {
 	config := DefaultConfig(townRoot)
 
 	start := time.Now()
 	ctx := context.Background()
-	cmd := buildDoltSQLCmd(ctx, config, "-q", "SELECT 1")
+	cmd := buildDoltSQLCmd(ctx, config, "-q", "SELECT active_branch()")
 	output, err := cmd.CombinedOutput()
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return 0, fmt.Errorf("SELECT 1 failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+		return 0, fmt.Errorf("SELECT active_branch() failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
 	return elapsed, nil

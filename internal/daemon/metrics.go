@@ -69,7 +69,7 @@ func newDaemonMetrics() (*daemonMetrics, error) {
 	}
 
 	latencyGauge, err := m.Float64ObservableGauge("gastown.dolt.query_latency_ms",
-		metric.WithDescription("Dolt SELECT 1 round-trip latency in milliseconds"),
+		metric.WithDescription("Dolt health probe round-trip latency in milliseconds"),
 		metric.WithUnit("ms"),
 	)
 	if err != nil {

@@ -374,7 +374,7 @@ func (m *DoltServerManager) EnsureRunning() error {
 			return m.restartWithBackoff()
 		}
 		// Check write capability (read-only detection).
-		// The SELECT 1 health check above only verifies read connectivity.
+		// The health check above only verifies read connectivity.
 		// Under concurrent write load, Dolt can enter a persistent read-only
 		// state that requires a server restart to clear.
 		if err := m.checkWriteHealthLocked(); err != nil {
@@ -875,19 +875,22 @@ func (m *DoltServerManager) checkHealth() error {
 }
 
 // checkHealthLocked checks health. Must be called with m.mu held.
-// Performs a connectivity check (SELECT 1) with latency measurement, and logs
+// Performs a connectivity check (SELECT active_branch()) with latency measurement, and logs
 // warnings for degraded resource conditions (high latency, high connection count,
 // disk usage). Returns an error only if the server is unreachable.
 func (m *DoltServerManager) checkHealthLocked() error {
 	if m.healthCheckFn != nil {
 		return m.healthCheckFn()
 	}
-	// 1. Connectivity + latency: time a SELECT 1
+	// 1. Connectivity + latency: time a SELECT active_branch()
+	// Per Tim Sehn (Dolt CEO): active_branch() is a lightweight probe that
+	// won't block behind queued queries, unlike SELECT 1 which goes through
+	// the full query executor.
 	ctx, cancel := context.WithTimeout(context.Background(), doltCmdTimeout)
 	defer cancel()
 
 	start := time.Now()
-	cmd := m.buildDoltSQLCmd(ctx, "-q", "SELECT 1")
+	cmd := m.buildDoltSQLCmd(ctx, "-q", "SELECT active_branch()")
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
