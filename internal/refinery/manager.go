@@ -215,6 +215,13 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 
 	_ = runtime.RunStartupFallback(t, sessionID, "refinery", runtimeConfig)
 
+	// Stream refinery's Claude Code JSONL conversation log to VictoriaLogs (opt-in).
+	if os.Getenv("GT_LOG_AGENT_OUTPUT") == "true" && os.Getenv("GT_OTEL_LOGS_URL") != "" {
+		if err := session.ActivateAgentLogging(sessionID, refineryRigDir); err != nil {
+			log.Printf("warning: agent log watcher setup failed for %s: %v", sessionID, err)
+		}
+	}
+
 	return nil
 }
 

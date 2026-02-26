@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
@@ -32,6 +33,7 @@ type recorderInstruments struct {
 	promptTotal         metric.Int64Counter
 	paneReadTotal       metric.Int64Counter
 	paneOutputTotal     metric.Int64Counter
+	agentEventTotal     metric.Int64Counter
 	primeTotal         metric.Int64Counter
 	agentStateTotal    metric.Int64Counter
 	polecatTotal       metric.Int64Counter
@@ -78,6 +80,9 @@ func initInstruments() {
 		)
 		inst.paneOutputTotal, _ = m.Int64Counter("gastown.pane.output.total",
 			metric.WithDescription("Total pane output chunks emitted to VictoriaLogs"),
+		)
+		inst.agentEventTotal, _ = m.Int64Counter("gastown.agent.events.total",
+			metric.WithDescription("Total agent conversation events emitted to VictoriaLogs"),
 		)
 		inst.primeTotal, _ = m.Int64Counter("gastown.prime.total",
 			metric.WithDescription("Total gt prime invocations"),
@@ -483,4 +488,38 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 		otellog.String("session", sessionID),
 		otellog.String("content", truncateOutput(content, maxPaneOutputLog)),
 	)
+}
+
+const maxAgentEventContent = 8192
+
+// RecordAgentEvent emits a structured agent conversation event to VictoriaLogs.
+// Opt-in: only called when GT_LOG_AGENT_OUTPUT=true.
+// agentType is the adapter name ("claudecode", "opencode", …).
+// eventType is one of "text", "tool_use", "tool_result", "thinking".
+// role is "assistant" or "user".
+// nativeSessionID is the agent-native session UUID (e.g. Claude Code JSONL filename UUID).
+// ts is the original timestamp from the conversation log (used to correlate with api_request events).
+func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role, content, nativeSessionID string, ts time.Time) {
+	initInstruments()
+	inst.agentEventTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("session", sessionID),
+		attribute.String("event_type", eventType),
+		attribute.String("role", role),
+	))
+	logger := global.GetLoggerProvider().Logger(loggerName)
+	var r otellog.Record
+	r.SetBody(otellog.StringValue("agent.event"))
+	r.SetSeverity(otellog.SeverityInfo)
+	if !ts.IsZero() {
+		r.SetTimestamp(ts)
+	}
+	r.AddAttributes(
+		otellog.String("session", sessionID),
+		otellog.String("agent_type", agentType),
+		otellog.String("event_type", eventType),
+		otellog.String("role", role),
+		otellog.String("content", truncateOutput(content, maxAgentEventContent)),
+		otellog.String("native_session_id", nativeSessionID),
+	)
+	logger.Emit(ctx, r)
 }
