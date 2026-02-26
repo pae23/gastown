@@ -2,11 +2,10 @@
 package beads
 
 import (
-	"encoding/json"
 	"strings"
 )
 
-// FindMRForBranch searches for an existing merge-request bead for the given branch.
+// FindMRForBranch searches for an open merge-request bead for the given branch.
 // Returns the MR bead if found, nil if not found.
 // This enables idempotent `gt done` - if an MR already exists, we skip creation.
 func (b *Beads) FindMRForBranch(branch string) (*Issue, error) {
@@ -26,11 +25,9 @@ func (b *Beads) FindMRForBranch(branch string) (*Issue, error) {
 		}
 	}
 
-	// Also check the wisps table: MR beads are created with --ephemeral so they
-	// live in the wisps table (SQLite), not the issues table (Dolt). bd list only
-	// queries issues, so we must query wisps separately or the existence check
-	// always misses and retries hit a UNIQUE constraint.
-	return b.findMRInWisps(branchPrefix), nil
+	// Fallback: check wisps table. MR beads created as ephemeral (b9900940)
+	// live in the wisps table, invisible to bd list --status=open.
+	return b.findMRInWisps(branchPrefix)
 }
 
 // FindMRForBranchAny searches for a merge-request bead for the given branch
@@ -52,30 +49,30 @@ func (b *Beads) FindMRForBranchAny(branch string) (*Issue, error) {
 		}
 	}
 
-	// Also check wisps table (ephemeral MR beads not visible to bd list)
-	return b.findMRInWisps(branchPrefix), nil
+	return nil, nil
 }
 
-// findMRInWisps searches the wisps table for a merge-request bead matching branchPrefix.
-// Returns nil if not found or if the wisps table is unavailable.
-func (b *Beads) findMRInWisps(branchPrefix string) *Issue {
-	out, err := b.run("mol", "wisp", "list", "--json")
+// findMRInWisps searches the wisps table for an open merge-request bead
+// matching branchPrefix. Uses bd list --status=all which includes both
+// issues (Dolt) and wisps (SQLite) tables with full descriptions.
+// Scoped to gt:merge-request label to keep the result set small.
+func (b *Beads) findMRInWisps(branchPrefix string) (*Issue, error) {
+	issues, err := b.List(ListOptions{
+		Status: "all",
+		Label:  "gt:merge-request",
+	})
 	if err != nil {
-		return nil // Wisps table may not exist yet
+		return nil, err
 	}
-
-	var wrapper struct {
-		Wisps []*Issue `json:"wisps"`
-	}
-	if err := json.Unmarshal(out, &wrapper); err != nil {
-		return nil
-	}
-
-	for _, w := range wrapper.Wisps {
-		if strings.HasPrefix(w.Description, branchPrefix) {
-			return w
+	for _, issue := range issues {
+		if issue.Status == "closed" {
+			continue
+		}
+		if strings.HasPrefix(issue.Description, branchPrefix) {
+			return issue, nil
 		}
 	}
 
-	return nil
+	return nil, nil
 }
+
