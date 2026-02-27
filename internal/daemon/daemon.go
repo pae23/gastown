@@ -318,6 +318,17 @@ func (d *Daemon) Run() error {
 		d.logger.Println("Convoy manager started")
 	}
 
+	// Wire a recovery callback so that when Dolt transitions from unhealthy
+	// back to healthy, the convoy manager runs a sweep to catch any convoys
+	// that completed during the outage and were missed by the event poller.
+	if d.doltServer != nil {
+		cm := d.convoyManager
+		d.doltServer.SetRecoveryCallback(func() {
+			d.logger.Printf("Dolt recovery detected: triggering convoy recovery sweep")
+			cm.scan()
+		})
+	}
+
 	// Start KRC pruner for automatic ephemeral data cleanup
 	krcPruner, err := NewKRCPruner(d.config.TownRoot, d.logger.Printf)
 	if err != nil {
@@ -1838,6 +1849,9 @@ func (d *Daemon) restartPolecatSession(rigName, polecatName, sessionName string)
 		}
 		return fmt.Errorf("creating session: %w", err)
 	}
+
+	// Record polecat spawn metric.
+	d.metrics.recordPolecatSpawn(d.ctx, rigName)
 
 	// Set environment variables in tmux session table (for debugging/monitoring tools).
 	// The process itself gets env vars via 'exec env ...' in the startup command.

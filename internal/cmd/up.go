@@ -895,9 +895,13 @@ func ensureCrossSocketBindings() {
 
 	// Always ensure bindings on the "default" socket since that's where
 	// users typically have their interactive terminal sessions.
+	// Pass townSocket so the binding embeds GT_TOWN_SOCKET=<name> in the
+	// run-shell command — gt agents menu needs it to locate the right tmux
+	// server when invoked from a non-town directory where InitRegistry is
+	// never called.
 	// EnsureBindingsOnSocket is idempotent and safe if default == town.
 	if townSocket != "default" {
-		_ = tmux.EnsureBindingsOnSocket("default")
+		_ = tmux.EnsureBindingsOnSocket("default", townSocket)
 	}
 }
 
