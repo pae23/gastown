@@ -200,8 +200,14 @@ func (t *Tmux) NewSession(name, workDir string) error {
 	if workDir != "" {
 		args = append(args, "-c", workDir)
 	}
-	_, err := t.run(args...)
-	return err
+	if _, err := t.run(args...); err != nil {
+		return err
+	}
+	// tmux 3.3+ sets window-size=manual on detached sessions (no client present),
+	// which locks the window at 80x24 even after a client attaches. Override to
+	// "latest" so the window auto-resizes to the attaching client's terminal size.
+	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
+	return nil
 }
 
 // NewSessionWithCommand creates a new detached tmux session that immediately runs a command.
@@ -237,6 +243,10 @@ func (t *Tmux) NewSessionWithCommand(name, workDir, command string) error {
 	if _, err := t.run(args...); err != nil {
 		return err
 	}
+	// tmux 3.3+ sets window-size=manual on detached sessions (no client present),
+	// which locks the window at 80x24 even after a client attaches. Override to
+	// "latest" so the window auto-resizes to the attaching client's terminal size.
+	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
 
 	// Enable remain-on-exit BEFORE command runs so we can inspect exit status
 	_, _ = t.run("set-option", "-t", name, "remain-on-exit", "on")
@@ -298,6 +308,10 @@ func (t *Tmux) NewSessionWithCommandAndEnv(name, workDir, command string, env ma
 	if _, err := t.run(args...); err != nil {
 		return err
 	}
+	// tmux 3.3+ sets window-size=manual on detached sessions (no client present),
+	// which locks the window at 80x24 even after a client attaches. Override to
+	// "latest" so the window auto-resizes to the attaching client's terminal size.
+	_, _ = t.run("set-option", "-wt", name, "window-size", "latest")
 
 	// Enable remain-on-exit BEFORE command runs so we can inspect exit status
 	_, _ = t.run("set-option", "-t", name, "remain-on-exit", "on")
