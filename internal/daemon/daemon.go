@@ -1850,6 +1850,9 @@ func (d *Daemon) restartPolecatSession(rigName, polecatName, sessionName string)
 		return fmt.Errorf("creating session: %w", err)
 	}
 
+	// Record polecat spawn metric.
+	d.metrics.recordPolecatSpawn(d.ctx, rigName)
+
 	// Set environment variables in tmux session table (for debugging/monitoring tools).
 	// The process itself gets env vars via 'exec env ...' in the startup command.
 	for k, v := range envVars {
