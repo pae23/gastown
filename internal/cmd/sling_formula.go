@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -139,9 +141,11 @@ func runSlingFormula(args []string) error {
 		Dir(formulaWorkDir).
 		WithGTRoot(townRoot).
 		Run(); err != nil {
+		telemetry.RecordMolCook(context.Background(), formulaName, err)
 		rollbackSpawned("")
 		return fmt.Errorf("cooking formula: %w", err)
 	}
+	telemetry.RecordMolCook(context.Background(), formulaName, nil)
 
 	// Step 2: Create wisp instance (ephemeral)
 	fmt.Printf("  Creating wisp...\n")
@@ -164,9 +168,11 @@ func runSlingFormula(args []string) error {
 	// Parse wisp output to get the root ID
 	wispRootID, err := parseWispIDFromJSON(wispOut)
 	if err != nil {
+		telemetry.RecordMolWisp(context.Background(), formulaName, "", "", err)
 		rollbackSpawned("")
 		return fmt.Errorf("parsing wisp output: %w", err)
 	}
+	telemetry.RecordMolWisp(context.Background(), formulaName, wispRootID, "", nil)
 
 	fmt.Printf("%s Wisp created: %s\n", style.Bold.Render("✓"), wispRootID)
 

@@ -19,12 +19,27 @@ func TestBuildGTResourceAttrs_Empty(t *testing.T) {
 	}
 }
 
+func TestBuildGTResourceAttrs_Session(t *testing.T) {
+	t.Setenv("GT_ROLE", "deacon")
+	t.Setenv("GT_RIG", "")
+	t.Setenv("BD_ACTOR", "deacon")
+	t.Setenv("GT_POLECAT", "")
+	t.Setenv("GT_CREW", "")
+	t.Setenv("GT_SESSION", "hq-deacon")
+
+	result := buildGTResourceAttrs()
+	if !strings.Contains(result, "gt.session=hq-deacon") {
+		t.Errorf("expected gt.session in result, got %q", result)
+	}
+}
+
 func TestBuildGTResourceAttrs_AllVars(t *testing.T) {
 	t.Setenv("GT_ROLE", "mol/witness")
 	t.Setenv("GT_RIG", "mol")
 	t.Setenv("BD_ACTOR", "mol/witness")
 	t.Setenv("GT_POLECAT", "furiosa")
 	t.Setenv("GT_CREW", "")
+	t.Setenv("GT_SESSION", "")
 
 	result := buildGTResourceAttrs()
 	for _, want := range []string{"gt.role=mol/witness", "gt.rig=mol", "gt.actor=mol/witness", "gt.agent=furiosa"} {

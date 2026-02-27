@@ -1,6 +1,7 @@
 package refinery
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +13,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
@@ -173,6 +177,9 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 		return fmt.Errorf("building startup command: %w", err)
 	}
 
+	// Generate the GASTA run ID for this refinery session.
+	runID := uuid.New().String()
+
 	// Create session with command directly to avoid send-keys race condition.
 	// See: https://github.com/anthropics/gastown/issues/280
 	if err := t.NewSessionWithCommand(sessionID, refineryRigDir, command); err != nil {
@@ -182,10 +189,11 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 	// Set environment variables (non-fatal: session works without these)
 	// Use centralized AgentEnv for consistency across all role startup paths
 	envVars := config.AgentEnv(config.AgentEnvConfig{
-		Role:     "refinery",
-		Rig:      m.rig.Name,
-		TownRoot: townRoot,
-		Agent:    agentOverride,
+		Role:        "refinery",
+		Rig:         m.rig.Name,
+		TownRoot:    townRoot,
+		Agent:       agentOverride,
+		SessionName: sessionID,
 	})
 	envVars = session.MergeRuntimeLivenessEnv(envVars, runtimeConfig)
 
@@ -196,6 +204,7 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 	for k, v := range envVars {
 		_ = t.SetEnvironment(sessionID, k, v)
 	}
+	_ = t.SetEnvironment(sessionID, "GT_RUN", runID)
 
 	// Apply theme (non-fatal: theming failure doesn't affect operation)
 	theme := tmux.AssignTheme(m.rig.Name)
@@ -214,6 +223,39 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 	}
 
 	_ = runtime.RunStartupFallback(t, sessionID, "refinery", runtimeConfig)
+
+	// Stream refinery's Claude Code JSONL conversation log to VictoriaLogs (opt-in).
+	if os.Getenv("GT_LOG_AGENT_OUTPUT") == "true" && os.Getenv("GT_OTEL_LOGS_URL") != "" {
+		if err := session.ActivateAgentLogging(sessionID, refineryRigDir, runID); err != nil {
+			log.Printf("warning: agent log watcher setup failed for %s: %v", sessionID, err)
+		}
+	}
+
+	// Record the agent instantiation event (GASTA root span).
+	agentType := runtimeConfig.ResolvedAgent
+	if agentType == "" {
+		agentType = "claudecode"
+	}
+	refineryBranch, refineryCommit := "", ""
+	if g := git.NewGit(refineryRigDir); g != nil {
+		if b, err := g.CurrentBranch(); err == nil {
+			refineryBranch = b
+		}
+		if c, err := g.Rev("HEAD"); err == nil {
+			refineryCommit = c
+		}
+	}
+	telemetry.RecordAgentInstantiate(context.Background(), telemetry.AgentInstantiateInfo{
+		RunID:     runID,
+		AgentType: agentType,
+		Role:      "refinery",
+		AgentName: "refinery",
+		SessionID: sessionID,
+		RigName:   m.rig.Name,
+		TownRoot:  townRoot,
+		GitBranch: refineryBranch,
+		GitCommit: refineryCommit,
+	})
 
 	return nil
 }

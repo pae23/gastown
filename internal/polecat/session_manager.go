@@ -12,14 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/runtime"
-	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/session"
+	"github.com/steveyegge/gastown/internal/style"
+	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
@@ -299,17 +301,25 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	// when the polecat's cwd is deleted before gt done finishes, these env vars allow
 	// branch detection and path resolution without a working directory.
 	polecatGitBranch := ""
+	polecatGitCommit := ""
 	if g := git.NewGit(workDir); g != nil {
 		if b, err := g.CurrentBranch(); err == nil {
 			polecatGitBranch = b
 		}
+		if c, err := g.Rev("HEAD"); err == nil {
+			polecatGitCommit = c
+		}
 	}
+	// Generate the GASTA run ID — the root identifier for all telemetry emitted
+	// by this polecat session and its subprocesses (bd, mail, …).
+	runID := uuid.New().String()
 	envVarsToInject := map[string]string{
 		"GT_RIG":          m.rig.Name,
 		"GT_POLECAT":      polecat,
 		"GT_ROLE":         fmt.Sprintf("%s/polecats/%s", m.rig.Name, polecat),
 		"GT_POLECAT_PATH": workDir,
 		"GT_TOWN_ROOT":    townRoot,
+		"GT_RUN":          runID,
 	}
 	if polecatGitBranch != "" {
 		envVarsToInject["GT_BRANCH"] = polecatGitBranch
@@ -332,6 +342,7 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 		TownRoot:         townRoot,
 		RuntimeConfigDir: opts.RuntimeConfigDir,
 		Agent:            opts.Agent,
+		SessionName:      sessionID,
 	})
 	for k, v := range envVars {
 		debugSession("SetEnvironment "+k, m.tmux.SetEnvironment(sessionID, k, v))
@@ -355,6 +366,8 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	}
 	debugSession("SetEnvironment GT_POLECAT_PATH", m.tmux.SetEnvironment(sessionID, "GT_POLECAT_PATH", workDir))
 	debugSession("SetEnvironment GT_TOWN_ROOT", m.tmux.SetEnvironment(sessionID, "GT_TOWN_ROOT", townRoot))
+	// Set GT_RUN in the session environment so respawned processes also inherit it.
+	debugSession("SetEnvironment GT_RUN", m.tmux.SetEnvironment(sessionID, "GT_RUN", runID))
 
 	// Disable Dolt auto-commit in tmux session environment (gt-5cc2p).
 	// This ensures respawned processes also inherit the setting.
@@ -455,6 +468,32 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	// Touch initial heartbeat so liveness detection works from the start (gt-qjtq).
 	// Subsequent touches happen on every gt command via persistentPreRun.
 	TouchSessionHeartbeat(townRoot, sessionID)
+
+	// Stream polecat's Claude Code JSONL conversation log to VictoriaLogs (opt-in).
+	if os.Getenv("GT_LOG_AGENT_OUTPUT") == "true" && os.Getenv("GT_OTEL_LOGS_URL") != "" {
+		if err := session.ActivateAgentLogging(sessionID, workDir, runID); err != nil {
+			// Non-fatal: observability failure must never block agent startup.
+			debugSession("ActivateAgentLogging", err)
+		}
+	}
+
+	// Record the agent instantiation event (GASTA root span).
+	agentType := runtimeConfig.ResolvedAgent
+	if agentType == "" {
+		agentType = "claudecode"
+	}
+	telemetry.RecordAgentInstantiate(context.Background(), telemetry.AgentInstantiateInfo{
+		RunID:     runID,
+		AgentType: agentType,
+		Role:      "polecat",
+		AgentName: polecat,
+		SessionID: sessionID,
+		RigName:   m.rig.Name,
+		TownRoot:  townRoot,
+		IssueID:   opts.Issue,
+		GitBranch: polecatGitBranch,
+		GitCommit: polecatGitCommit,
+	})
 
 	return nil
 }

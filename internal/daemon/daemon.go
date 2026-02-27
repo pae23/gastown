@@ -1917,10 +1917,11 @@ func (d *Daemon) restartPolecatSession(rigName, polecatName, sessionName string)
 	// the race condition in the old EnsureSessionFresh + SendKeys pattern where
 	// the shell might not be ready to receive keystrokes, producing empty windows.
 	envVars := config.AgentEnv(config.AgentEnvConfig{
-		Role:      "polecat",
-		Rig:       rigName,
-		AgentName: polecatName,
-		TownRoot:  d.config.TownRoot,
+		Role:        "polecat",
+		Rig:         rigName,
+		AgentName:   polecatName,
+		TownRoot:    d.config.TownRoot,
+		SessionName: sessionName,
 	})
 	rc := config.ResolveRoleAgentConfig("polecat", d.config.TownRoot, rigPath)
 	startCmd := config.BuildStartupCommand(envVars, rigPath, "")

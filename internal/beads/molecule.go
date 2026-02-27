@@ -2,10 +2,13 @@
 package beads
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/steveyegge/gastown/internal/telemetry"
 )
 
 // MoleculeStep represents a parsed step from a molecule definition.
@@ -331,6 +334,7 @@ func (b *Beads) instantiateFromChildren(mol *Issue, parent *Issue, templates []*
 			}
 			return nil, fmt.Errorf("creating step from template %q: %w", tmpl.ID, err)
 		}
+		telemetry.RecordBeadCreate(context.Background(), child.ID, parent.ID, mol.ID)
 
 		createdIssues = append(createdIssues, child)
 		templateToNew[tmpl.ID] = child.ID
@@ -424,6 +428,7 @@ func (b *Beads) instantiateFromMarkdown(mol *Issue, parent *Issue, opts Instanti
 			}
 			return nil, fmt.Errorf("creating step %q: %w", step.Ref, err)
 		}
+		telemetry.RecordBeadCreate(context.Background(), child.ID, parent.ID, mol.ID)
 
 		createdIssues = append(createdIssues, child)
 		stepIssueIDs[step.Ref] = child.ID
