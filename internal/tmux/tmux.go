@@ -110,9 +110,28 @@ type Tmux struct {
 	socketName string // tmux socket name (-L flag), empty = default socket
 }
 
-// NewTmux creates a new Tmux wrapper that inherits the default socket.
+// noTownSocket is a sentinel socket name used when no town socket is configured.
+// Using a non-existent socket causes tmux operations to fail with a clear
+// "no server running" error instead of silently connecting to the wrong server.
+const noTownSocket = "gt-no-town-socket"
+
+// NewTmux creates a new Tmux wrapper using the initialized town socket.
+// Falls back to GT_TOWN_SOCKET env var (set by cross-socket tmux bindings),
+// then to a sentinel socket that fails clearly if neither is available.
 func NewTmux() *Tmux {
-	return &Tmux{socketName: defaultSocket}
+	sock := defaultSocket
+	if sock == "" {
+		// GT_TOWN_SOCKET is embedded in tmux bindings created by EnsureBindingsOnSocket
+		// so that "gt agents menu" / "gt feed" invoked from a personal terminal still
+		// target the correct town server even when InitRegistry was not called.
+		sock = os.Getenv("GT_TOWN_SOCKET")
+	}
+	if sock == "" {
+		// No town context available: use sentinel to produce a clear error rather
+		// than silently connecting to the user's personal tmux server.
+		sock = noTownSocket
+	}
+	return &Tmux{socketName: sock}
 }
 
 // NewTmuxWithSocket creates a Tmux wrapper that targets a named socket.
