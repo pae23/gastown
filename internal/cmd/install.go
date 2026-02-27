@@ -69,8 +69,9 @@ Examples:
   gt install ~/gt --github=user/repo --public  # Create public GitHub repo
   gt install ~/gt --shell                      # Install shell integration (sets GT_TOWN_ROOT/GT_RIG)
   gt install ~/gt --supervisor                 # Configure launchd/systemd for daemon auto-restart`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: runInstall,
+	Args:         cobra.MaximumNArgs(1),
+	RunE:         runInstall,
+	SilenceUsage: true,
 }
 
 func init() {
@@ -161,9 +162,21 @@ func runInstall(cmd *cobra.Command, args []string) error {
 				os.Setenv("GT_DOLT_PORT", strconv.Itoa(port))
 			}
 			if err := doltserver.CheckPortAvailable(port); err != nil {
-				// Reconstruct the original command for the suggestion.
+				pid, dataDir := doltserver.PortHolder(port)
+				msg := fmt.Sprintf("Dolt port %d is already in use", port)
+				if pid > 0 && dataDir != "" {
+					msg += fmt.Sprintf("\nPort is held by dolt PID %d serving %s", pid, dataDir)
+				} else if pid > 0 {
+					msg += fmt.Sprintf("\nPort is held by PID %d", pid)
+				}
+				msg += "\n\nAnother Gas Town instance is using this port. Specify a free port:"
 				origArgs := strings.Join(os.Args[1:], " ")
-				return fmt.Errorf("%w\n\nRerun with a free port:\n  gt %s --dolt-port <port>", err, origArgs)
+				if freePort := doltserver.FindFreePort(port + 1); freePort > 0 {
+					msg += fmt.Sprintf("\n\n  gt %s --dolt-port %d", origArgs, freePort)
+				} else {
+					msg += fmt.Sprintf("\n\n  gt %s --dolt-port <port>", origArgs)
+				}
+				return fmt.Errorf("%s", msg)
 			}
 		}
 	}

@@ -723,13 +723,32 @@ func KillImposters(townRoot string) error {
 	return nil
 }
 
-// checkPortAvailable verifies a TCP port is free before starting the server.
-// Returns a user-friendly error if the port is already in use, which commonly
-// happens when multiple Gas Town instances share the same Dolt port.
 // CheckPortAvailable verifies that a TCP port is free for use as a Dolt server.
 // Returns a user-friendly error if the port is already in use.
 func CheckPortAvailable(port int) error {
 	return checkPortAvailable(port)
+}
+
+// PortHolder returns the PID and data directory of the process holding port.
+// Returns (0, "") if the port is free or the holder cannot be identified.
+func PortHolder(port int) (pid int, dataDir string) {
+	pid = findDoltServerOnPort(port)
+	if pid > 0 {
+		dataDir = getProcessDataDir(pid)
+	}
+	return pid, dataDir
+}
+
+// FindFreePort returns the first free TCP port at or above startFrom.
+// Returns 0 if no free port is found within 100 attempts.
+func FindFreePort(startFrom int) int {
+	for port := startFrom; port < startFrom+100; port++ {
+		if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+			_ = ln.Close()
+			return port
+		}
+	}
+	return 0
 }
 
 func checkPortAvailable(port int) error {
