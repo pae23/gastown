@@ -398,7 +398,14 @@ func startRigAgents(rigs []*rig.Rig, mu *sync.Mutex) {
 }
 
 // startWitnessForRig starts the witness for a single rig and returns a status message.
+// Respects parked/docked status - skips starting if rig is not operational.
 func startWitnessForRig(r *rig.Rig) string {
+	// Check rig operational state before starting
+	townRoot := filepath.Dir(r.Path)
+	if state, _ := getRigOperationalState(townRoot, r.Name); state != "OPERATIONAL" {
+		return fmt.Sprintf("  %s %s witness skipped (rig %s)\n", style.Dim.Render("○"), r.Name, strings.ToLower(state))
+	}
+
 	witMgr := witness.NewManager(r)
 	if err := witMgr.Start(false, "", nil); err != nil {
 		if errors.Is(err, witness.ErrAlreadyRunning) {
@@ -410,7 +417,14 @@ func startWitnessForRig(r *rig.Rig) string {
 }
 
 // startRefineryForRig starts the refinery for a single rig and returns a status message.
+// Respects parked/docked status - skips starting if rig is not operational.
 func startRefineryForRig(r *rig.Rig) string {
+	// Check rig operational state before starting
+	townRoot := filepath.Dir(r.Path)
+	if state, _ := getRigOperationalState(townRoot, r.Name); state != "OPERATIONAL" {
+		return fmt.Sprintf("  %s %s refinery skipped (rig %s)\n", style.Dim.Render("○"), r.Name, strings.ToLower(state))
+	}
+
 	refineryMgr := refinery.NewManager(r)
 	if err := refineryMgr.Start(false, ""); err != nil {
 		if errors.Is(err, refinery.ErrAlreadyRunning) {
