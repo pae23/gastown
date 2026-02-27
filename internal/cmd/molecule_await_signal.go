@@ -56,7 +56,10 @@ EXIT CODES:
   1 - Error opening events file
 
 EXAMPLES:
-  # Simple wait with 60s timeout
+  # Simple wait with 60s timeout (canonical form)
+  gt mol step await-signal --timeout 60s
+
+  # Short form (alias)
   gt mol await-signal --timeout 60s
 
   # Backoff mode with agent bead tracking:
