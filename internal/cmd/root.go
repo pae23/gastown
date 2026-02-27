@@ -103,8 +103,11 @@ func persistentPreRun(cmd *cobra.Command, args []string) error {
 	logCommandUsage(cmd, args)
 
 	// Initialize session prefix registry and agent registry from town root.
-	// Best-effort: if town root not found, the default "gt" prefix is used.
-	if townRoot, err := workspace.FindFromCwd(); err == nil && townRoot != "" {
+	// Try CWD detection first, then fall back to GT_TOWN_ROOT / GT_ROOT env vars.
+	// Env var fallback ensures commands invoked from outside the town directory
+	// (e.g., "gt agents menu" via a cross-socket tmux binding) still connect to
+	// the correct town socket rather than silently using the wrong server.
+	if townRoot := detectTownRootFromCwd(); townRoot != "" {
 		if err := session.InitRegistry(townRoot); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: failed to initialize town registry: %v\n", err)
 		}
