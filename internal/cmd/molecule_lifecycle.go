@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -85,7 +86,13 @@ func runMoleculeBurn(cmd *cobra.Command, args []string) (retErr error) {
 	// Recursively close all descendant step issues before detaching
 	// This prevents orphaned step issues from accumulating (gt-psj76.1)
 	childrenClosed := closeDescendants(b, moleculeID)
-	defer func() { telemetry.RecordMolBurn(cmd.Context(), moleculeID, childrenClosed, retErr) }()
+	defer func() {
+		ctx := context.Background()
+		if cmd != nil {
+			ctx = cmd.Context()
+		}
+		telemetry.RecordMolBurn(ctx, moleculeID, childrenClosed, retErr)
+	}()
 
 	// Detach the molecule with audit logging (this "burns" it by removing the attachment)
 	_, err = b.DetachMoleculeWithAudit(handoff.ID, beads.DetachOptions{
