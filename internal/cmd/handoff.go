@@ -181,6 +181,16 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("getting session name: %w", err)
 	}
 
+	// Resolve the actual pane ID from the live tmux session. TMUX_PANE can be
+	// stale if the session was respawned since this process started (e.g., boot
+	// watchdog respawns panes but child processes retain the old TMUX_PANE).
+	if livePane, err := getSessionPane(currentSession); err == nil && livePane != "" {
+		if livePane != pane {
+			style.PrintWarning("TMUX_PANE %s is stale, using live pane %s", pane, livePane)
+			pane = livePane
+		}
+	}
+
 	// Warn if workspace has uncommitted or unpushed work (wa-7967c).
 	// Note: this checks the caller's cwd, not the target session's workdir.
 	// For remote handoff (gt handoff <role>), the warning reflects the caller's
@@ -438,6 +448,14 @@ func runHandoffCycle() error {
 		handoffMessage = message
 		handoffSubject = subject
 		return runHandoffAuto()
+	}
+
+	// Resolve stale TMUX_PANE (same fix as runHandoff — see comment there)
+	if livePane, err := getSessionPane(currentSession); err == nil && livePane != "" {
+		if livePane != pane {
+			fmt.Fprintf(os.Stderr, "handoff --cycle: TMUX_PANE %s stale, using live pane %s\n", pane, livePane)
+			pane = livePane
+		}
 	}
 
 	t := tmux.NewTmux()
