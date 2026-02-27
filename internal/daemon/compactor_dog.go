@@ -12,7 +12,8 @@ import (
 const (
 	defaultCompactorDogInterval = 24 * time.Hour
 	// compactorCommitThreshold is the minimum commit count before compaction triggers.
-	compactorCommitThreshold = 500
+	// HQ generates ~6k commits/day, so 10k is roughly 1.5 days of headroom.
+	compactorCommitThreshold = 10000
 	// compactorQueryTimeout is the timeout for individual SQL queries during compaction.
 	compactorQueryTimeout = 30 * time.Second
 	// compactorBranchName is the temporary branch used during compaction.
