@@ -236,7 +236,7 @@ func checkPollution(townRoot string, port int) []PollutionRecord {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 
 		for _, c := range checks {
-			query := fmt.Sprintf("SELECT id, COALESCE(title,'') FROM issues WHERE %s LIMIT 10", c.where)
+			query := fmt.Sprintf("SELECT id, COALESCE(title,'') FROM issues WHERE (%s) AND status != 'closed' LIMIT 10", c.where)
 			rows, err := db.QueryContext(ctx, query)
 			if err != nil {
 				continue
