@@ -215,6 +215,13 @@ func DefaultConfig(townRoot string) *Config {
 		config.LogLevel = ll
 	}
 
+	// Default to debug logging per Dolt team recommendation (Dustin Brown, 2026-02-24):
+	// "run the Dolt server with loglevel debug or trace until everything is stable
+	// so you can send us the server logs when you hit an issue"
+	if config.LogLevel == "" {
+		config.LogLevel = "debug"
+	}
+
 	return config
 }
 
