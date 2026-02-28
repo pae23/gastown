@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/steveyegge/gastown/internal/config"
 )
 
 //go:embed config/*.json
@@ -27,13 +25,13 @@ const (
 )
 
 // RoleTypeFor returns the RoleType for a given role name.
-// Autonomous/interactive classification is driven by the TOML role definitions
-// in internal/config/roles/*.toml (single source of truth).
 func RoleTypeFor(role string) RoleType {
-	if config.IsAutonomous(role) {
+	switch role {
+	case "polecat", "witness", "refinery", "deacon", "boot":
 		return Autonomous
+	default:
+		return Interactive
 	}
-	return Interactive
 }
 
 // EnsureSettings ensures .claude/settings.json exists in the given directory.

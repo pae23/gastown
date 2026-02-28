@@ -117,12 +117,8 @@ func (f *Formula) validateConvoy() error {
 }
 
 func (f *Formula) validateWorkflow() error {
-	// Composition formulas inherit steps via extends — no local steps required
-	if len(f.Steps) == 0 && len(f.Extends) == 0 {
-		return fmt.Errorf("workflow formula requires at least one step")
-	}
 	if len(f.Steps) == 0 {
-		return nil // Composition formula — steps come from base
+		return fmt.Errorf("workflow formula requires at least one step")
 	}
 
 	// Check step IDs are unique
@@ -189,9 +185,8 @@ func (f *Formula) validateExpansion() error {
 }
 
 func (f *Formula) validateAspect() error {
-	// Aspect formulas can either define aspects (consumer) or advice (provider)
-	if len(f.Aspects) == 0 && len(f.Advice) == 0 {
-		return fmt.Errorf("aspect formula requires at least one aspect or advice")
+	if len(f.Aspects) == 0 {
+		return fmt.Errorf("aspect formula requires at least one aspect")
 	}
 
 	// Check aspect IDs are unique

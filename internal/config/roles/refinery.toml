@@ -3,8 +3,6 @@
 
 role = "refinery"
 scope = "rig"
-autonomous = true
-emoji = "🏭"
 nudge = "Run 'gt prime' to check merge queue and begin processing."
 prompt_template = "refinery.md.tmpl"
 

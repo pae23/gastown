@@ -202,6 +202,12 @@ This is the key insight from Tim Sehn (Dolt founder, 2026-02-27):
 commit graph — it's the real cleanup mechanism. DELETE + gc is necessary
 but insufficient. DELETE + rebase + gc is the full pipeline.
 
+**Critical update** (Tim Sehn, 2026-02-28): All compaction operations —
+`DOLT_RESET --soft`, `DOLT_REBASE()`, `dolt_gc()` — are **safe on a
+running server**. No downtime or maintenance window is needed. Auto-GC
+has been ON by default since Dolt 1.75.0. Flatten is trivially cheap
+(pointer moves, not data writes). Can run daily or more frequently.
+
 Reference: https://www.dolthub.com/blog/2026-01-28-everybody-rebase/
 
 ### The Six-Stage Lifecycle
@@ -219,8 +225,8 @@ CREATE → LIVE → CLOSE → DECAY → COMPACT → FLATTEN
 | CREATE | Any agent | Continuous | `bd create`, `bd mol wisp create` |
 | CLOSE | Agent or patrol | Per-task | `bd close`, `gt done` |
 | DECAY | Reaper Dog | Daily | `DELETE FROM wisps WHERE status='closed' AND age > 7d` |
-| COMPACT | Compactor Dog | Daily | `CALL DOLT_REBASE()` — squash old commits together |
-| FLATTEN | Mayor or manual | Monthly | Branch, soft-reset to initial commit, commit, swap main |
+| COMPACT | Compactor Dog | Daily | `DOLT_RESET --soft` + `DOLT_COMMIT` (safe on running server) |
+| FLATTEN | Compactor Dog | Daily | Same as COMPACT — no downtime, no maintenance window |
 
 All six stages are implemented. DECAY runs in the Reaper Dog (wisp_reaper.go),
 COMPACT/FLATTEN run in the Compactor Dog (compactor_dog.go).
@@ -234,8 +240,7 @@ EPHEMERAL (wisps, patrol data)          PERMANENT (issues, molecules, agents)
   → CLOSE (>24h)                          → CLOSE
   → DELETE rows (Reaper)                  → JSONL export (scrubbed)
   → REBASE history (Compactor)            → git push to GitHub
-  → gc unreferenced chunks (Compactor)    → COMPACT history periodically
-                                          → FLATTEN history quarterly
+  → gc unreferenced chunks (Compactor)    → COMPACT/FLATTEN daily (no downtime)
 ```
 
 **Ephemeral data** (wisps, wisp_events, wisp_labels, wisp_deps) is
@@ -250,42 +255,64 @@ can be rebased into 1. The data survives; the intermediate history doesn't.
 
 ### History Compaction Operations
 
-**Daily compaction** (Compactor Dog):
+**Daily compaction** (Compactor Dog or Dolt scheduled event):
+
+All compaction operations are safe on a running server — no downtime
+needed. Can also be wired as a Dolt scheduled event (MySQL-style cron):
+https://www.dolthub.com/blog/2023-10-02-scheduled-events/
+
 ```sql
--- Squash recent commits on a feature branch, then merge
-CALL DOLT_CHECKOUT('-b', 'compact-temp');
-CALL DOLT_REBASE('--interactive', 'main~50', 'HEAD');
--- Agent resolves: squash old commits, keep recent ones
-CALL DOLT_CHECKOUT('main');
-CALL DOLT_MERGE('compact-temp');
-CALL DOLT_BRANCH('-d', 'compact-temp');
+-- Simple daily flatten (squash everything older than working set)
+SET @init = (SELECT commit_hash FROM dolt_log ORDER BY date ASC LIMIT 1);
+CALL DOLT_RESET('--soft', @init);
+CALL DOLT_COMMIT('-Am', 'daily compaction');
 ```
 
-**Monthly flatten** (nuclear option from Tim Sehn):
-```bash
-# Squash ALL history to a single commit
-cd ~/gt/.dolt-data/<db>
-dolt checkout -b fresh-start
-dolt reset --soft $(dolt log --oneline | tail -1 | awk '{print $1}')
-dolt commit -m "Flatten: squash history to single commit"
-dolt branch -D main
-dolt branch -m fresh-start main
-dolt gc
+**Flatten** (safe on a running server — no downtime needed):
+
+Flatten is trivially cheap. `dolt_reset --soft` doesn't write any data —
+it moves the parent pointer of the working set to the referenced commit.
+The subsequent commit writes a new commit and two small pointer writes.
+Can be run daily or even more frequently (Tim Sehn, 2026-02-28).
+
+```sql
+-- Flatten via SQL on a running server (preferred)
+-- Find the initial commit
+SET @init = (SELECT commit_hash FROM dolt_log ORDER BY date ASC LIMIT 1);
+CALL DOLT_RESET('--soft', @init);
+CALL DOLT_COMMIT('-Am', 'flatten: squash history');
+-- GC runs automatically when journal exceeds 50MB
+```
+
+Concurrent writes during a flatten are safe — the merge base becomes
+the initial commit, but the diff is just what the transaction wrote,
+so the merge succeeds.
+
+**Surgical compaction** via interactive rebase (squash old, keep recent):
+
+```sql
+-- Rebase on a side branch (never directly on main — hashes change)
+-- Exact procedure TBD — awaiting instructions from Jason (Dolt team)
+-- Reference: https://www.dolthub.com/blog/2024-01-03-announcing-dolt-rebase/
 ```
 
 ### Dolt GC
 
 `dolt gc` compacts old chunk data AFTER rebase removes commits from the
-graph. Run gc after rebase, not instead of it. The Compactor Dog runs gc
-automatically after each successful compaction. Order matters: rebase
+graph. Run gc after rebase, not instead of it. Order matters: rebase
 first, gc second.
 
-```bash
-# Manual gc (stop server first for exclusive access)
-gt dolt stop
-cd ~/gt/.dolt-data/<db> && dolt gc
-gt dolt start
+**Automatic GC is ON by default** since Dolt 1.75.0 (October 2025). It
+triggers when the journal file (`.dolt/noms/vvvv...`) reaches 50MB. No
+manual gc or server stop is required — the server handles it.
+
+```sql
+-- Manual gc (safe on a running server, no need to stop)
+CALL dolt_gc();
 ```
+
+GC is memory-hungry but our databases are small, so no concern (Tim Sehn,
+2026-02-28).
 
 ### Pollution Prevention
 

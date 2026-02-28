@@ -3,7 +3,6 @@
 
 role = "crew"
 scope = "rig"
-emoji = "👷"
 nudge = "Check your hook and mail, then act accordingly."
 prompt_template = "crew.md.tmpl"
 

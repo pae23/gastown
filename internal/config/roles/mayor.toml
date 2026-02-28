@@ -3,7 +3,6 @@
 
 role = "mayor"
 scope = "town"
-emoji = "🎩"
 nudge = "Check mail and hook status, then act accordingly."
 prompt_template = "mayor.md.tmpl"
 
