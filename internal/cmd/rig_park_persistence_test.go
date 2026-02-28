@@ -38,18 +38,18 @@ func randomTestPrefix(t *testing.T) string {
 func setupRigBeadsDB(t *testing.T, rigPath, prefix string) *beads.Beads {
 	t.Helper()
 	requireBdCLI(t)
-	testutil.RequireDoltServer(t)
+	testutil.RequireDoltContainer(t)
 
-	port, _ := strconv.Atoi(testutil.DoltTestPort())
+	port, _ := strconv.Atoi(testutil.DoltContainerPort())
 	b := beads.NewIsolatedWithPort(rigPath, port)
 	if err := b.Init(prefix); err != nil {
 		t.Fatalf("bd init failed: %v", err)
 	}
 
-	// Keep the shared test Dolt server clean.
+	// Keep the test container clean.
 	dbName := "beads_" + prefix
 	t.Cleanup(func() {
-		dsn := "root:@tcp(127.0.0.1:" + testutil.DoltTestPort() + ")/"
+		dsn := "root:@tcp(127.0.0.1:" + testutil.DoltContainerPort() + ")/"
 		db, err := sql.Open("mysql", dsn)
 		if err != nil {
 			t.Logf("cleanup: sql.Open failed for %s: %v", dbName, err)

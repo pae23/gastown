@@ -10,13 +10,15 @@ import (
 	"sync"
 	"testing"
 
+	_ "github.com/go-sql-driver/mysql" // required by testcontainers Dolt module
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/dolt"
 )
 
 // DoltDockerImage is the Docker image used for Dolt test containers.
-// Matches MinDoltVersion in internal/deps/dolt.go.
-const DoltDockerImage = "dolthub/dolt-sql-server:1.82.4"
+// Note: 1.82.4 has a broken auth handshake for root connections via
+// the MySQL wire protocol with go-sql-driver. Use 1.43.0 which works.
+const DoltDockerImage = "dolthub/dolt-sql-server:1.43.0"
 
 var (
 	doltCtr      *dolt.DoltContainer
@@ -41,7 +43,7 @@ func isDockerAvailable() bool {
 func startSharedDoltContainer() {
 	ctx := context.Background()
 	ctr, err := dolt.Run(ctx, DoltDockerImage,
-		dolt.WithUsername("root"),
+		dolt.WithDatabase("gt_test"),
 	)
 	if err != nil {
 		doltCtrErr = fmt.Errorf("starting Dolt container: %w", err)
@@ -72,7 +74,7 @@ func StartIsolatedDoltContainer(t *testing.T) string {
 
 	ctx := context.Background()
 	ctr, err := dolt.Run(ctx, DoltDockerImage,
-		dolt.WithUsername("root"),
+		dolt.WithDatabase("gt_test"),
 	)
 	if err != nil {
 		t.Fatalf("starting Dolt container: %v", err)
