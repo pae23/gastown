@@ -10,6 +10,28 @@ Gas Town uses OpenTelemetry (OTel) for structured observability of all agent ope
 
 ---
 
+## Quick Setup
+
+Set at least one endpoint variable to activate telemetry — both endpoints unset means telemetry is completely disabled (no instrumentation code runs):
+
+```bash
+# Full local setup (recommended)
+export GT_OTEL_METRICS_URL=http://localhost:8428/opentelemetry/api/v1/push
+export GT_OTEL_LOGS_URL=http://localhost:9428/insert/opentelemetry/v1/logs
+
+# Opt-in features
+export GT_LOG_AGENT_OUTPUT=true   # Stream Claude conversation turns to logs
+export GT_LOG_BD_OUTPUT=true      # Include bd stdout/stderr in bd.call records
+```
+
+**Local backends (Docker):**
+```bash
+docker run -d -p 8428:8428 victoriametrics/victoria-metrics
+docker run -d -p 9428:9428 victoriametrics/victoria-logs
+```
+
+**Verify:** `gt prime` should emit a `prime` event visible at `http://localhost:9428/select/vmui`.
+
 ---
 
 ## Implementation Status
@@ -72,31 +94,78 @@ Gas Town uses OpenTelemetry (OTel) for structured observability of all agent ope
 
 ---
 
-## Future Evolution
+## Roadmap
 
-### To Implement Next
+### P0 — Critical (blocking accurate attribution)
 
-| Priority                        | Description                                                                                                                 |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Polecat → Rig/Build context** | ⚠️ **Critical** — Inject `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_BUILD` during `gt prime` to trace work to correct rig/bead |
-| **Native AI session correlation** | Improve link between native AI agent sessions and work context (e.g., Claude Code, OpenCode, custom adapters via `AgentAdapter` interface) |
-| **Cross-rig work tracing** | Correlate when same polecat works on different rigs |
-| **Work-context telemetry** | Enrich events with work metadata (rig/bead/build) |
+**Work context injection during `gt prime`**
 
+Polecats are rig-scoped identities but work across rigs. Currently, all telemetry for a polecat session shows the *allocation* rig, not the *work* rig.
+
+Fix: inject `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_BUILD` into the session environment at `gt prime` time, and carry them in `agent.instantiate`. This unlocks correct cost attribution per rig and per bead.
+
+New attributes on `agent.instantiate` and `agent.event`:
+
+| Attribute | Type | Description |
+|---|---|---|
+| `work_rig` | string | rig the polecat is currently working on |
+| `work_bead` | string | bead ID being processed |
+| `work_build` | string | build/formula context |
 
 ---
 
-### Improvement Ideas
+### P1 — High value
 
-| Domain | Idea |
-|----------|-------|
-| **Dolt health monitoring** | Expose Dolt health metrics to telemetry (connections, queries) |
-| **Refinery queue depth** | Expose Refinery pending work queue size |
-| **Scheduler dispatch logs** | Trace scheduler cycles: queue depth, dispatched count, capacity usage, failures |
-| | - `scheduler.dispatch_cycle` (metrics + log): dispatched, failed, skipped counts per cycle |
-| | - `scheduler.queue_depth` (histogram): current pending beads queue size |
-| | - `scheduler.capacity_usage` (gauge): free/used dispatch slots |
-**Scheduler telemetry flow** (once implemented):
+**Token cost metric (`gastown.token.cost_usd`)**
+
+Compute dollar cost per run from token counts using Claude model pricing. Emit as a Gauge metric at session end. Enables per-rig and per-bead cost dashboards.
+
+New metric: `gastown.token.cost_usd{rig, role, agent_type}` — accumulated cost per session.
+New event attribute on `agent.usage`: `cost_usd` — cost of the current turn.
+
+---
+
+**Go runtime/process metrics (low effort)**
+
+The OTel Go SDK has a contrib package (`go.opentelemetry.io/contrib/instrumentation/runtime`) that auto-emits goroutine count, GC pause duration, heap usage, and memory allocations. Activation is ~5 lines of code in `telemetry.Init()`.
+
+New metrics: `process.runtime.go.goroutines`, `process.runtime.go.gc.pause_ns`, `process.runtime.go.mem.heap_alloc_bytes`
+
+---
+
+**Refinery queue telemetry**
+
+The Refinery's merge queue is a central health indicator but currently completely dark to observability. Expose:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `gastown.refinery.queue_depth` | Gauge | pending items in merge queue |
+| `gastown.refinery.item_age_ms` | Histogram | age of oldest item in queue |
+| `gastown.refinery.dispatch_latency_ms` | Histogram | time between enqueue and dispatch |
+
+New log event: `refinery.dispatch` with `bead_id`, `queue_depth`, `wait_ms`, `status`.
+
+---
+
+**Distributed Traces (OTel Traces SDK)**
+
+Currently the waterfall relies on `run.id` as a manual correlation key across flat log records. Replacing this with proper OTel Traces would enable:
+
+- Visual waterfall in Jaeger / Grafana Tempo
+- Automatic parent → child span attribution (no manual run.id joins)
+- P95/P99 latency per operation derived from spans, not histograms
+
+Architecture: each polecat session spawn creates a **root span** (`gt.session`). Child spans are created for `bd.call`, `mail`, `sling`, `done`. The `run.id` becomes the trace ID. `GT_RUN` propagation becomes W3C `traceparent` header injection.
+
+This is a significant effort (requires `go.opentelemetry.io/otel/trace` + tracer provider + exporter) but would be the single highest-impact observability improvement.
+
+---
+
+### P2 — Medium value
+
+**Scheduler dispatch telemetry**
+
+Expose the capacity-controlled dispatch cycle:
 
 ```mermaid
 flowchart TD
@@ -114,11 +183,43 @@ flowchart TD
     J --> K[Log: scheduler.capacity_usage<br/>free/used slots]
 ```
 
-| **Session health scores** | Score session health by success/error rates |
-|----------|-------|
-| **Work completion time** | Histogram of completion time per role/rig/work type |
-| **Token efficiency** | Tokens per unit of work (bead) |
-| **Retry patterns** | Identify polecats with high failure/retry rates |
+New metrics: `scheduler.dispatch_cycle` (dispatched/failed/skipped counts), `scheduler.queue_depth` (histogram), `scheduler.capacity_usage` (gauge).
+
+---
+
+**`done` event enrichment**
+
+Currently `done` carries only `exit_type` and `status`. Adding work context enables per-rig completion analysis:
+
+New attributes: `rig`, `bead_id`, `time_to_complete_ms` (wall time from session start to done).
+
+---
+
+**Witness patrol cycle telemetry**
+
+Each witness patrol cycle should emit: duration, stale sessions detected, restarts triggered. Enables trend analysis on witness health.
+
+New event: `witness.patrol` with `duration_ms`, `stale_count`, `restart_count`, `status`.
+
+---
+
+**Dolt health metrics**
+
+Dolt issues are only detected at spawn time today. Exposing health metrics continuously:
+
+New metrics: `gastown.dolt.connections`, `gastown.dolt.query_duration_ms` (histogram), `gastown.dolt.replication_lag_ms`.
+
+---
+
+### P3 — Nice to have
+
+| Item | Description |
+|------|-------------|
+| **Deacon watchdog telemetry** | State machine transitions in the deacon watchdog chain |
+| **Crew session tracking** | Crew session cycle events: start, push, done, idle |
+| **Git operation telemetry** | Track clone, checkout, fetch duration per polecat session |
+| **OTel W3C Baggage** | Replace `GT_RUN` env var propagation with W3C Baggage for standard cross-process context |
+| **Retry pattern detection** | Alert when a polecat's error rate exceeds threshold across runs |
 
 ---
 
@@ -290,9 +391,9 @@ Two mechanisms ensure subprocess telemetry is correlated:
 
 ### Session Context Variables (Set by `session.StartSession`)
 
-| Variable | Format | Example | Used By |
-|----------|--------|---------| |
-| `GT_ROLE` | `<rig>/polecats/<name>` or `mayor` or `beads/witness` | Agent role for identity parsing |
+| Variable | Values / Format | Description |
+|----------|-----------------|-------------|
+| `GT_ROLE` | `<rig>/polecats/<name>` · `mayor` · `beads/witness` | Agent role for identity parsing |
 | `GT_RIG` | `gastown`, `beads` | Rig name (empty for town-level agents) |
 | `GT_POLECAT` | `Toast`, `Shadow`, `Furiosa` | Polecat name (rig-specific) |
 | `GT_CREW` | `max`, `jane` | Crew member name |
@@ -309,99 +410,7 @@ Two mechanisms ensure subprocess telemetry is correlated:
 
 ## Event Types
 
-### Core Events
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `agent.instantiate` | Session start (all agents) | `run.id`, `agent_type`, `role`, `agent_name`, `session_id`, `rig`, `issue_id`, `git_branch`, `git_commit` |
-| `session.start` / `session.stop` | Tmux session lifecycle | `run.id`, `session_id`, `role`, `status` |
-| `prime` | Each `gt prime` invocation | `run.id`, `role`, `hook_mode`, `formula` (in separate `prime.context` event), `status` |
-
-### Agent Events (Opt-in)
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `agent.event` | Claude conversation turn | `run.id`, `session`, `native_session_id`, `agent_type`, `event_type`, `role`, `content` |
-| `agent.usage` | Token usage per turn | `run.id`, `session`, `native_session_id`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens` |
-
-### Work & Mail Events
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `bd.call` | Each invocation of `bd` CLI | `run.id`, `subcommand`, `args`, `duration_ms`, `stdout`, `stderr` (see PR #2068 for details), `status` |
-| `mail` | All operations on Gastown mail system | `run.id`, `operation`, `msg.id`, `msg.from`, `msg.to`, `msg.subject`, `msg.body`, `msg.thread_id`, `msg.priority`, `msg.type`, `status` |
-
-### State & Lifecycle Events
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `agent.state_change` | Agent transition | `run.id`, `agent_id`, `new_state`, `hook_bead`, `status` |
-| `daemon.restart` | Witness-initiated restart | `run.id`, `agent_type` |
-
-### Molecule Events
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `mol.cook` / `mol.wisp` / `mol.squash` / `mol.burn` | Molecule lifecycle events emitted at each stage of formula workflow |
-
-**`mol.cook`** — formula compiled to a proto (prerequisite for wisp creation):
-
-| Attribute | Type | Description |
-|---|---|---|
-| `run.id` | string | run UUID |
-| `formula_name` | string | formula name (e.g. `"mol-polecat-work"`) |
-| `status` | string | `"ok"` · `"error"` |
-
-**`mol.wisp`** — proto instantiated as a live wisp (ephemeral molecule instance):
-
-| Attribute | Type | Description |
-|---|---|---|
-| `run.id` | string | run UUID |
-| `formula_name` | string | formula name |
-| `wisp_root_id` | string | root bead ID of created wisp |
-| `bead_id` | string | base bead bonded to wisp; empty for standalone formula slinging |
-| `status` | string | `"ok"` · `"error"` |
-
-**`mol.squash`** — molecule execution completed and collapsed to a digest:
-
-| Attribute | Type | Description |
-|---|---|---|
-| `run.id` | string | run UUID |
-| `mol_id` | string | molecule root bead ID |
-| `done_steps` | int | number of steps completed |
-| `total_steps` | int | total steps in the molecule |
-| `digest_created` | bool | false when `--no-digest` flag was set |
-| `status` | string | `"ok"` · `"error"` |
-
-**`mol.burn`** — molecule destroyed without creating a digest:
-
-| Attribute | Type | Description |
-|---|---|---|
-| `run.id` | string | run UUID |
-| `mol_id` | string | molecule root bead ID |
-| `children_closed` | int | number of descendant step beads closed |
-| `status` | string | `"ok"` · `"error"` |
-
-### `bead.create`
-
-| Event | Trigger | Key Attributes |
-|-------|---------|----------------|
-| `bead.create` | Child bead during molecule instantiation | `run.id`, `bead_id`, `parent_id`, `mol_source` |
-
-### Other events
-
-All carry `run.id`.
-
-| Event body | Key attributes |
-|---|---|
-| `sling` | `bead`, `target`, `status`, `error` |
-| `nudge` | `target`, `status`, `error` |
-| `done` | `exit_type` (`COMPLETED` · `ESCALATED` · `DEFERRED`), `status`, `error` |
-| `polecat.spawn` | `name`, `status`, `error` |
-| `polecat.remove` | `name`, `status`, `error` |
-| `formula.instantiate` | `formula_name`, `bead_id`, `status`, `error` (top-level formula-on-bead result) |
-| `convoy.create` | `bead_id`, `status`, `error` |
-| `daemon.restart` | `agent_type` |
+See [OTel Data Model](otel-data-model.md) for the complete event schema, attribute tables, and metric reference.
 
 ---
 
@@ -482,9 +491,9 @@ sum(rate(gastown.bd.calls.total[5m])) by (subcommand, status)
 
 **Latency distributions:**
 ```promql
-histogram_quantile(gastown.bd.duration_ms, 0.5) by (subcommand)
-histogram_quantile(gastown.bd.duration_ms, 0.95) by (subcommand)
-histogram_quantile(gastown.bd.duration_ms, 0.99) by (subcommand)
+histogram_quantile(0.5, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
+histogram_quantile(0.95, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
+histogram_quantile(0.99, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
 ```
 
 **Waterfall by run:**
@@ -498,62 +507,59 @@ sum(increase(gastown.agent.events.total)) by (run.id, event_type)
 
 **Find all events for a run:**
 ```logsql
-_msg:agent.instantiate | json run.id = "uuid-1234"
-_msg:agent.event | json run.id = "uuid-1234"
-_msg:bd.call | json run.id = "uuid-1234"
+_msg:agent.instantiate AND run.id:uuid-1234
+_msg:agent.event AND run.id:uuid-1234
+_msg:bd.call AND run.id:uuid-1234
 ```
 
 **Error analysis:**
 ```logsql
-_msg:* | json status = "error" | level >= ERROR
-_msg:bd.call | json status = "error"
-_msg:session.stop | json status = "error"
+status:error
+_msg:bd.call AND status:error
+_msg:session.stop AND status:error
 ```
 
 **Polecat lifecycle:**
 ```logsql
 _msg:polecat.spawn
 _msg:polecat.remove
-_msg:agent.state_change | json new_state = "working" or new_state = "idle"
+_msg:agent.state_change AND new_state:working
 ```
 
 ### Debugging Examples
 
 **Track a polecat working across multiple rigs:**
 ```logsql
-_msg:* | json agent_name = "Toast"
+agent_name:Toast
 ```
 Shows all events from polecat Toast, regardless of rig assignment.
 
 **Identify sessions with high error rates:**
 ```logsql
-_msg:bd.call | json status = "error" | time:5m
+_msg:bd.call AND status:error
 ```
-Group by error count over 5-minute windows.
 
 **Find sessions where tokens are consumed but no work is completed:**
 ```logsql
 _msg:agent.usage
-_msg:done | time:1h
+_msg:done
 ```
-Correlate token usage with work completion (done events) within same hour.
+Correlate token usage with work completion (done events) within the same time window.
 
 **Cross-rig work analysis** (future, once work context is implemented):
 ```logsql
-_msg:agent.instantiate | json role = "polecat"
-_msg:bd.call | json subcommand = "update"
-_msg:mail | json operation = "send"
+_msg:agent.instantiate AND role:polecat
+_msg:bd.call AND subcommand:update AND work_rig:gastown
 ```
-When GT_WORK_RIG is implemented, you can filter by work_rig attribute to trace cross-rig work assignments.
 
 ---
 
 ## Related Documentation
 
 - [OTel Data Model](otel-data-model.md) — Complete event schema
-- [Polecat Lifecycle](concepts/polecat-lifecycle.md) — Persistent polecat model
-- [Overview](overview.md) — Role taxonomy and architecture
-- [Reference](reference.md) — Environment variables and commands
+- [Polecat Lifecycle](../../concepts/polecat-lifecycle.md) — Persistent polecat model
+- [Overview](../../overview.md) — Role taxonomy and architecture
+- [Reference](../../reference.md) — Environment variables and commands
 
 ## Backends Compatible with OTLP
 

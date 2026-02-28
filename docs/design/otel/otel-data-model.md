@@ -90,6 +90,23 @@ Emitted once per agent spawn. Anchors all subsequent events for that run.
 | `git_branch` | string | git branch of the working directory at spawn time |
 | `git_commit` | string | HEAD SHA of the working directory at spawn time |
 
+**Example log record (as received by VictoriaLogs):**
+```json
+{
+  "run.id": "a3f8c21d-4b6e-4f10-9c32-e5d7a8f9b0c1",
+  "instance": "laptop:gt",
+  "town_root": "/Users/pa/gt",
+  "agent_type": "claudecode",
+  "role": "polecat",
+  "agent_name": "wyvern-Toast",
+  "session_id": "gt-wyvern-Toast",
+  "rig": "wyvern",
+  "issue_id": "bead-abc123",
+  "git_branch": "feat/my-feature",
+  "git_commit": "d4e5f6a7b8c9d0e1"
+}
+```
+
 ---
 
 ### `session.start` / `session.stop`
@@ -115,7 +132,20 @@ separately as `prime.context` (same attributes plus `formula`).
 | `run.id` | string | run UUID |
 | `role` | string | Gastown role |
 | `hook_mode` | bool | true when invoked from a hook |
-| `formula` | string | full rendered formula (`prime.context` only) |
+| `status` | string | `"ok"` · `"error"` |
+
+---
+
+### `prime.context`
+
+Companion to `prime`, emitted in the same invocation. Carries the full rendered formula text.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `run.id` | string | run UUID |
+| `role` | string | Gastown role |
+| `hook_mode` | bool | true when invoked from a hook |
+| `formula` | string | full rendered formula text |
 | `status` | string | `"ok"` · `"error"` |
 
 ---
