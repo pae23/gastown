@@ -147,6 +147,45 @@ func (f *Formula) validateWorkflow() error {
 		return err
 	}
 
+	// Validate model routing constraints on each step
+	for _, step := range f.Steps {
+		if err := validateStepConstraints(step); err != nil {
+			return fmt.Errorf("step %q: %w", step.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// validateStepConstraints checks model routing fields on a step.
+func validateStepConstraints(step Step) error {
+	validAccessTypes := map[string]bool{"subscription": true, "api_key": true, "": true}
+	if !validAccessTypes[step.AccessType] {
+		return fmt.Errorf("access_type %q must be \"subscription\", \"api_key\", or omitted", step.AccessType)
+	}
+
+	validCapabilities := map[string]bool{"vision": true, "code_execution": true}
+	for _, cap := range step.Requires {
+		if !validCapabilities[cap] {
+			return fmt.Errorf("unknown capability %q in requires (valid: vision, code_execution)", cap)
+		}
+	}
+
+	if step.MinMMLU < 0 || step.MinMMLU > 100 {
+		return fmt.Errorf("min_mmlu %g is out of range [0, 100]", step.MinMMLU)
+	}
+	if step.MinSWE < 0 || step.MinSWE > 100 {
+		return fmt.Errorf("min_swe %g is out of range [0, 100]", step.MinSWE)
+	}
+	if step.MaxCost < 0 {
+		return fmt.Errorf("max_cost %g must be non-negative", step.MaxCost)
+	}
+
+	// "auto" is a reserved keyword meaning heuristic routing; anything else is a literal model ID
+	if step.Model != "" && step.Model != "auto" && step.Provider != "" {
+		return fmt.Errorf("specify model or provider, not both")
+	}
+
 	return nil
 }
 

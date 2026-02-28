@@ -8,21 +8,6 @@
 
 ---
 
-## Relationship with Consensus
-
-Consensus and model-aware molecules are **complementary layers** that share the same session awareness infrastructure but serve different purposes:
-
-| | Consensus | Molecules |
-|---|---|---|
-| **Pattern** | Fan-out | DAG routing |
-| **Shape** | Same prompt → N agents → compare | N steps → best model per step |
-| **Session infra** | `GT_AGENT` + `AgentPresetInfo` readiness | Same — reused, not rebuilt |
-| **Routing goal** | Diversity (multiple perspectives) | Optimality (right model for each step) |
-
-The provider resolution pipeline that Consensus v2 established — `GT_AGENT` env lookup → `AgentPresetInfo` → readiness detection (prompt polling or delay fallback) — is exactly the session awareness the molecule router needs for dispatch. See §5.3 (Two-Phase Routing).
-
----
-
 ## 1. Introduction / Overview
 
 Molecules currently support dependency-based DAG execution, but lack the ability to specify **which AI model** should execute each step. With multiple AI providers (Anthropic, OpenAI, DeepSeek, Google, etc.) and access types (API keys and subscriptions like Claude Code), we need:
@@ -224,13 +209,7 @@ cost_per_1k_out = 0.0
 good_for = ["coding"]
 ```
 
-### 5.3 Two-Phase Routing
-
-Routing happens in two sequential phases. No LLM calls are made at any point.
-
-#### Phase 1 — Model Selection (`SelectModel`)
-
-Picks the optimal model from the capability database based on step constraints and scoring heuristics.
+### 5.3 Meta-Model Router
 
 ```go
 // internal/models/router.go
@@ -248,7 +227,6 @@ type StepConstraints struct {
 }
 
 type RoutingDecision struct {
-    // Model selection (Phase 1)
     ModelID      string
     Provider     string
     AccessType   string   // "subscription" | "api_key"
@@ -257,16 +235,12 @@ type RoutingDecision struct {
     CostPer1KOut float64
     MMLUScore    float64
     SWEScore     float64
-
-    // Session resolution (Phase 2) — nil when no live session found
-    SessionID    string   // tmux session name, e.g. "gt-gastown-polecat-Toast"
-    AgentPreset  string   // resolved GT_AGENT value, e.g. "claude", "gemini"
 }
 
 func SelectModel(constraints StepConstraints, db []ModelEntry) (*RoutingDecision, error)
 ```
 
-Scoring:
+Scoring (no LLM calls):
 
 | Factor | Weight |
 |--------|--------|
@@ -274,39 +248,6 @@ Scoring:
 | MMLU score (normalized 0–100) | up to 30 pts |
 | SWE score (normalized 0–100) | up to 20 pts |
 | Cost savings (inverse of $0.10/1K ceiling) | up to 10 pts |
-
-#### Phase 2 — Session Resolution (`ResolveSession`)
-
-After a model is selected, find a **live, idle tmux session** running that model. This reuses the existing `GT_AGENT` + `AgentPresetInfo` infrastructure from the provider resolution pipeline — the same logic Consensus v2 uses.
-
-```go
-// internal/models/router.go (planned)
-
-// ResolveSession scans running tmux sessions and returns the first one that is
-// idle and running the selected model. Returns nil if no matching session is found.
-//
-// Resolution:
-//  1. List active tmux sessions
-//  2. Read GT_AGENT env var from each session
-//  3. Look up AgentPresetInfo for that agent name
-//  4. Check readiness: prompt polling (ReadyPromptPrefix e.g. "❯ ") or delay fallback (ReadyDelayMs)
-//  5. Return first session that matches ModelID and is idle
-func ResolveSession(decision *RoutingDecision, tmux Tmux) *RoutingDecision
-```
-
-**Readiness detection** is taken directly from `AgentPresetInfo` — no new mechanism:
-
-| Agent type | Detection method | Source |
-|---|---|---|
-| Claude | Prompt prefix polling (`❯ `) | `AgentPresetInfo.ReadyPromptPrefix` |
-| OpenCode, Codex | Delay-based fallback | `AgentPresetInfo.ReadyDelayMs` |
-| Custom agents | Delay-based fallback | Same |
-
-**Dispatch outcome**:
-- Live idle session found → dispatch step directly to that session
-- No matching session → spawn a new session with the selected model (`AgentPresetInfo.Command + Args`)
-
-This means molecule steps target **live sessions by model capability**, not just by name. A step specifying `min_mmlu = 85` will route to whichever idle session happens to be running a qualifying model, without the formula author needing to know session names.
 
 ### 5.4 Molecule Step Constraints
 
@@ -551,25 +492,14 @@ description = "Thorough work with quality model within budget"
 - [ ] Detect API key env vars (existing pattern) to determine available providers
 - [ ] Unit tests for discovery logic
 
-### Phase 3: Session-Aware Dispatch (P0)
+### Phase 3: CLI Integration (P1)
 
-Implement `ResolveSession()` using the existing `GT_AGENT` + `AgentPresetInfo` infrastructure:
-
-- [ ] Scan live tmux sessions; read `GT_AGENT` env var per session (already done in `sling_helpers.go`)
-- [ ] Look up `AgentPresetInfo` by agent name to get `ReadyPromptPrefix` / `ReadyDelayMs`
-- [ ] Implement idle check: prompt polling for agents with `ReadyPromptPrefix`, delay fallback otherwise
-- [ ] Return first idle session whose agent matches `RoutingDecision.ModelID`; set `SessionID` + `AgentPreset`
-- [ ] If no match: spawn a new session using `AgentPresetInfo.Command + Args` for the selected model
-- [ ] Unit tests for session matching and readiness detection
-
-### Phase 4: CLI Integration (P1)
-
-- [ ] Update `gt prime` to show model constraints, routing recommendation, and live session per step
-- [ ] Implement `gt step` for single-step execution with two-phase routing
-- [ ] Implement `gt mol execute --auto-route` for batch DAG execution
+- [ ] Update `gt prime` to show model constraints and routing recommendation per step
+- [ ] Implement `gt step` for single-step execution with routing
+- [ ] Implement `gt mol execute --auto-route` for batch execution
 - [ ] Implement `gt usage` and `gt usage --month`
 
-### Phase 5: Usage Recording at Dispatch (P1)
+### Phase 4: Usage Recording at Dispatch (P1)
 
 - [ ] Hook `RecordUsage` into the agent dispatch path
 - [ ] Derive `TokensIn`/`TokensOut` from `agent.usage` OTel events when available, or estimate
@@ -627,9 +557,7 @@ needs = ["previous-step"]
 
 | Question | Discussion |
 |----------|-------------|
-| **Dispatch mechanism** | Resolved: `ResolveSession()` targets the live tmux session directly. The routing decision (`SessionID`, `AgentPreset`) is the dispatch target — no separate env var injection needed. The step description is sent via the existing `tmux send-keys` / nudge path. |
-| **Model ID ↔ GT_AGENT mapping** | `GT_AGENT` values are agent preset names (`"claude"`, `"gemini"`), not model IDs (`"claude-sonnet-4-5"`). Need a mapping: `AgentPresetInfo` could carry a `DefaultModelID` field, or sessions could set an additional `GT_MODEL` env var at spawn time for precise matching. |
-| **Multiple sessions for same model** | If two Claude sessions are idle and both qualify, which gets the step? Current proposal: first idle session wins (FIFO). Alternative: round-robin or load-based. |
+| **Dispatch mechanism** | How does the routing decision reach the agent? Via `GT_STEP_MODEL` env var injected at dispatch, or via the step description? |
 | **Cost-based auto-switch** | Should the system switch to cheaper models mid-session if budget is nearly exhausted? |
 | **Model performance learning** | Should historical success rates (from usage.jsonl) influence routing weights? |
 | **Multi-subscription support** | Support for multiple Claude Code team subscriptions simultaneously? |

@@ -97,6 +97,22 @@ type Step struct {
 	Needs       []string `toml:"needs"`
 	Parallel    bool     `toml:"parallel"`   // If true, this step can run concurrently with other parallel steps that share the same needs
 	Acceptance  string   `toml:"acceptance"` // Exit criteria for this step (used by Ralph loop mode)
+
+	// Model routing constraints (all optional; omit to accept any available agent).
+	// Model is an exact model ID (e.g. "claude-sonnet-4-5"), or "auto" for heuristic routing.
+	Model      string   `toml:"model"`
+	// Provider filters by AI provider: "anthropic", "openai", "google", "deepseek", etc.
+	Provider   string   `toml:"provider"`
+	// AccessType requires a specific access method: "subscription" or "api_key".
+	AccessType string   `toml:"access_type"`
+	// MinMMLU requires a minimum MMLU benchmark score (0–100).
+	MinMMLU    float64  `toml:"min_mmlu"`
+	// MinSWE requires a minimum SWE-bench score (0–100).
+	MinSWE     float64  `toml:"min_swe"`
+	// Requires lists required model capabilities: "vision", "code_execution".
+	Requires   []string `toml:"requires"`
+	// MaxCost caps the cost in USD per 1K tokens (input+output combined).
+	MaxCost    float64  `toml:"max_cost"`
 }
 
 // Template represents a template step in an expansion formula.
