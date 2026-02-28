@@ -871,6 +871,55 @@ func TestSaveCustomTheme(t *testing.T) {
 	}
 }
 
+func TestSaveCustomTheme_AppendName(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "namepool-append-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	// Create initial theme
+	initial := []string{"aragorn", "legolas", "gimli-son"}
+	if err := SaveCustomTheme(tmpDir, "tolkien", initial); err != nil {
+		t.Fatalf("SaveCustomTheme error: %v", err)
+	}
+
+	// Read back, append, save again (simulates what `gt namepool add` does)
+	existing, err := ResolveThemeNames(tmpDir, "tolkien")
+	if err != nil {
+		t.Fatalf("ResolveThemeNames error: %v", err)
+	}
+	updated := append(existing, "gandalf")
+	if err := SaveCustomTheme(tmpDir, "tolkien", updated); err != nil {
+		t.Fatalf("SaveCustomTheme (append) error: %v", err)
+	}
+
+	// Verify the theme now has 4 names
+	final, err := ResolveThemeNames(tmpDir, "tolkien")
+	if err != nil {
+		t.Fatalf("ResolveThemeNames error: %v", err)
+	}
+	if len(final) != 4 {
+		t.Fatalf("expected 4 names after append, got %d: %v", len(final), final)
+	}
+	if final[3] != "gandalf" {
+		t.Errorf("expected gandalf at index 3, got %s", final[3])
+	}
+
+	// Verify pool allocation uses the updated theme
+	pool := NewNamePoolWithConfig(tmpDir, "testrig", "tolkien", nil, 10)
+	pool.SetTownRoot(tmpDir)
+	for i, expected := range []string{"aragorn", "legolas", "gimli-son", "gandalf"} {
+		name, err := pool.Allocate()
+		if err != nil {
+			t.Fatalf("Allocate error: %v", err)
+		}
+		if name != expected {
+			t.Errorf("allocation %d: expected %s, got %s", i, expected, name)
+		}
+	}
+}
+
 func TestSaveCustomTheme_BuiltinConflict(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "namepool-save-*")
 	if err != nil {

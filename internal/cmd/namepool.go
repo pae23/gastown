@@ -325,7 +325,34 @@ func runNamepoolAdd(cmd *cobra.Command, args []string) error {
 		settings.Namepool = config.DefaultNamepoolConfig()
 	}
 
-	// Check if name already exists
+	// If the rig uses a custom theme (not built-in) and has no per-rig name
+	// overrides, append to the theme file instead of the rig config.
+	// This prevents a single `add` from shadowing the entire custom theme.
+	style := settings.Namepool.Style
+	if style != "" && !polecat.IsBuiltinTheme(style) && len(settings.Namepool.Names) == 0 {
+		townRoot, _ := workspace.FindFromCwd()
+		if townRoot != "" {
+			// Read existing theme names, check for duplicate, append
+			existing, err := polecat.ResolveThemeNames(townRoot, style)
+			if err != nil {
+				return fmt.Errorf("resolving custom theme %q: %w", style, err)
+			}
+			for _, n := range existing {
+				if n == name {
+					fmt.Printf("Name '%s' already in theme '%s'\n", name, style)
+					return nil
+				}
+			}
+			updated := append(existing, name)
+			if err := polecat.SaveCustomTheme(townRoot, style, updated); err != nil {
+				return fmt.Errorf("saving theme file: %w", err)
+			}
+			fmt.Printf("Added '%s' to custom theme '%s'\n", name, style)
+			return nil
+		}
+	}
+
+	// Built-in theme or per-rig override: add to rig config as before
 	for _, n := range settings.Namepool.Names {
 		if n == name {
 			fmt.Printf("Name '%s' already in pool\n", name)
@@ -340,10 +367,6 @@ func runNamepoolAdd(cmd *cobra.Command, args []string) error {
 	if err := config.SaveRigSettings(settingsPath, settings); err != nil {
 		return fmt.Errorf("saving settings: %w", err)
 	}
-
-	// Note: No need to update runtime pool state - the settings file is the source
-	// of truth for custom names. The pool state file only persists OverflowNext/MaxSize.
-	// New managers will load custom names from settings/config.json.
 
 	fmt.Printf("Added '%s' to the name pool\n", name)
 	return nil
