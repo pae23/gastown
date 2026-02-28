@@ -785,40 +785,26 @@ func InstantiateFormulaOnBead(formulaName, beadID, title, hookWorkDir, townRoot 
 	// ("<id> not found"), while direct formula->bead bond still works. If legacy
 	// wisp->bead bond fails, retry with direct formula bond in ephemeral mode.
 	//
-	// gt-4gjd: Detect malformed wisp IDs (e.g., doubled "-wisp-" like "oag-wisp-wisp-rsia")
-	// and skip directly to fallback. This avoids the noisy error from a doomed bond attempt
-	// and prevents creating orphaned wisps from the failed path.
-	skipLegacyBond := isMalformedWispID(wispRootID)
-	if skipLegacyBond {
-		fmt.Fprintf(os.Stderr, "Warning: bd mol wisp returned malformed ID %q, using direct bond fallback\n", wispRootID)
+	// gt-4gjd: Warn about malformed wisp IDs (e.g., doubled "-wisp-" like "oag-wisp-wisp-rsia")
+	// but proceed — they are valid in the DB and bond correctly. The bd-side fix is ef57293e
+	// (not yet released).
+	if isMalformedWispID(wispRootID) {
+		fmt.Fprintf(os.Stderr, "Warning: bd mol wisp returned malformed ID %q (known bd bug, proceeding with bond)\n", wispRootID)
 	}
 
-	var bondOut []byte
-	legacyBondFailed := skipLegacyBond
-	if !skipLegacyBond {
-		bondArgs := []string{"mol", "bond", wispRootID, beadID, "--json"}
-		bondOut, err = BdCmd(bondArgs...).
-			Dir(formulaWorkDir).
-			WithAutoCommit().
-			WithGTRoot(townRoot).
-			Output()
-		if err != nil {
-			legacyBondFailed = true
-		}
-	}
-
-	if legacyBondFailed {
-		// gt-4gjd: Clean up orphaned wisp from the failed legacy path.
-		// bd mol wisp may have created a wisp that we can't bond (bad ID or
-		// ephemeral storage issue). Best-effort cleanup to prevent wisp accumulation.
+	bondArgs := []string{"mol", "bond", wispRootID, beadID, "--json"}
+	bondOut, err := BdCmd(bondArgs...).
+		Dir(formulaWorkDir).
+		WithAutoCommit().
+		WithGTRoot(townRoot).
+		Output()
+	if err != nil {
+		// Clean up orphaned wisp from the failed legacy path.
 		cleanupOrphanedWisp(wispRootID, formulaWorkDir)
 
 		fallbackRootID, fallbackErr := bondFormulaDirect(resolvedFormula, beadID, formulaWorkDir, townRoot, formulaVars)
 		if fallbackErr != nil {
-			if err != nil {
-				return nil, fmt.Errorf("bonding formula to bead: %w (direct formula bond fallback failed: %v)", err, fallbackErr)
-			}
-			return nil, fmt.Errorf("bonding formula to bead (malformed wisp ID %q): direct formula bond fallback failed: %v", wispRootID, fallbackErr)
+			return nil, fmt.Errorf("bonding formula to bead: %w (direct formula bond fallback failed: %v)", err, fallbackErr)
 		}
 		return &FormulaOnBeadResult{
 			WispRootID: fallbackRootID,
