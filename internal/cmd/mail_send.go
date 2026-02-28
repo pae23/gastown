@@ -18,6 +18,11 @@ import (
 )
 
 func runMailSend(cmd *cobra.Command, args []string) error {
+	// Check mail send rate limit based on agent role
+	if err := checkMailRateLimit(); err != nil {
+		return err
+	}
+
 	// Handle --stdin: read message body from stdin (avoids shell quoting issues)
 	if mailStdin {
 		if mailBody != "" {
@@ -153,6 +158,7 @@ func runMailSend(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("sending message: %w", err)
 		}
 		_ = events.LogFeed(events.TypeMail, from, events.MailPayload(to, mailSubject))
+		recordMailSend()
 		fmt.Printf("%s Message sent to %s\n", style.Bold.Render("✓"), to)
 		fmt.Printf("  Subject: %s\n", mailSubject)
 		return nil
@@ -206,6 +212,11 @@ func runMailSend(cmd *cobra.Command, args []string) error {
 
 	// Log mail event to activity feed
 	_ = events.LogFeed(events.TypeMail, from, events.MailPayload(to, mailSubject))
+
+	// Record successful send for rate limiting
+	if len(recipientAddrs) > 0 {
+		recordMailSend()
+	}
 
 	fmt.Printf("%s Message sent to %s\n", style.Bold.Render("✓"), to)
 	fmt.Printf("  Subject: %s\n", mailSubject)
