@@ -31,6 +31,17 @@ func buildGTResourceAttrs() string {
 	if v := os.Getenv("GT_RUN"); v != "" {
 		attrs = append(attrs, "gt.run_id="+v)
 	}
+	// Work context — set by gt prime via injectWorkContext; identifies the rig,
+	// bead, and molecule the agent is currently processing.
+	if v := os.Getenv("GT_WORK_RIG"); v != "" {
+		attrs = append(attrs, "gt.work_rig="+v)
+	}
+	if v := os.Getenv("GT_WORK_BEAD"); v != "" {
+		attrs = append(attrs, "gt.work_bead="+v)
+	}
+	if v := os.Getenv("GT_WORK_MOL"); v != "" {
+		attrs = append(attrs, "gt.work_mol="+v)
+	}
 	return strings.Join(attrs, ",")
 }
 
