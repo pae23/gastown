@@ -20,8 +20,8 @@ export GT_OTEL_METRICS_URL=http://localhost:8428/opentelemetry/api/v1/push
 export GT_OTEL_LOGS_URL=http://localhost:9428/insert/opentelemetry/v1/logs
 
 # Opt-in features
-export GT_LOG_AGENT_OUTPUT=true   # Stream Claude conversation turns to logs
 export GT_LOG_BD_OUTPUT=true      # Include bd stdout/stderr in bd.call records
+export GT_LOG_AGENT_OUTPUT=true   # Stream Claude conversation turns to logs (PR #2199)
 ```
 
 **Local backends (Docker):**
@@ -36,61 +36,63 @@ docker run -d -p 9428:9428 victoriametrics/victoria-logs
 
 ## Implementation Status
 
-### Core Telemetry (In main ✅)
+### Core Telemetry (Main ✅)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Core OTel initialization | ✅ Implemented | `telemetry.Init()`, providers setup |
-| Metrics export (counters) | ✅ Implemented | 25+ metric instruments |
-| Metrics export (histograms) | ✅ Implemented | `bd.duration_ms` histogram |
-| Logs export (any OTLP backend) | ✅ Implemented | OTLP logs exporter |
-| Subprocess correlation | ✅ Implemented | `GT_RUN` propagation, `OTEL_RESOURCE_ATTRIBUTES` |
+| Core OTel initialization | ✅ Main | `telemetry.Init()`, providers setup |
+| Metrics export (counters) | ✅ Main | 18 metric instruments |
+| Metrics export (histograms) | ✅ Main | `gastown.bd.duration_ms` histogram |
+| Logs export (any OTLP backend) | ✅ Main | OTLP logs exporter |
+| Subprocess correlation | ✅ Main | `OTEL_RESOURCE_ATTRIBUTES` via `SetProcessOTELAttrs()` |
 
-### Session Lifecycle (In main ✅)
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| **Session lifecycle** | ✅ Implemented | `session.start`/`session.stop` events (tmux lifecycle) |
-| **Agent instantiation** | ✅ Implemented | `agent.instantiate` event (root event with full metadata) |
-
-### Workflow & Work Events (In main ✅)
+### Session Lifecycle (Main ✅)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Prompt/nudge telemetry | ✅ Implemented | `prompt.send` events |
-| BD operation telemetry | ✅ Implemented | `bd.call` events (stdout/stderr opt-in via `GT_LOG_BD_OUTPUT=true`) |
-| Mail telemetry | ✅ Implemented | `mail` operations |
-| Sling/nudge/done telemetry | ✅ Implemented | All workflow events |
-| GT prime telemetry | ✅ Implemented | `prime` + `prime.context` events |
+| **Session lifecycle** | ✅ Main | `session.start`/`session.stop` events (tmux lifecycle) |
+| **Agent instantiation** | ❌ Roadmap | `agent.instantiate` event — no `RecordAgentInstantiate` function exists |
 
-### Agent Lifecycle (In main ✅)
+### Workflow & Work Events (Main ✅)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Polecat lifecycle telemetry | ✅ Implemented | `polecat.spawn`/`polecat.remove` |
-| Agent state telemetry | ✅ Implemented | `agent.state_change` events |
-| Daemon restart telemetry | ✅ Implemented | `daemon.restart` events |
-| Polecat spawn metric | ✅ Implemented | `gastown.polecat.spawns.total` |
+| Prompt/nudge telemetry | ✅ Main | `prompt.send` and `nudge` events |
+| BD operation telemetry | ✅ Main | `bd.call` events (stdout/stderr opt-in via `GT_LOG_BD_OUTPUT=true`) |
+| Mail telemetry | ✅ Main | `mail` operations (operation + status only; no message payload) |
+| Sling/done telemetry | ✅ Main | `sling` and `done` events |
+| GT prime telemetry | ✅ Main | `prime` + `prime.context` events |
+| Work context in `prime` | 🔲 PR #2199 | `work_rig`, `work_bead`, `work_mol` on `prime` events |
 
-### Molecule Lifecycle (In main ✅)
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Molecule lifecycle telemetry | ✅ Implemented | `mol.cook`/`mol.wisp`/`mol.squash`/`mol.burn` |
-| Bead creation telemetry | ✅ Implemented | `bead.create` events |
-| Formula instantiation telemetry | ✅ Implemented | `formula.instantiate` |
-| Convoy telemetry | ✅ Implemented | `convoy.create` events |
-
-### Agent Events (In main ✅)
+### Agent Lifecycle (Main ✅)
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| **Agent conversation events** | ✅ Available in main | `agent.event` per conversation turn (text/tool_use/tool_result/thinking) |
-| **Token usage tracking** | ✅ Available in main | `agent.usage` per assistant turn (input/output/cache_read/cache_creation) |
-| **Cloud session correlation** | ✅ Available in main | `native_session_id` linking Claude to GT telemetry |
-| **Agent logging daemon** | ✅ Available in main | `gt agent-log` detached process for JSONL streaming |
+| Polecat lifecycle telemetry | ✅ Main | `polecat.spawn`/`polecat.remove` |
+| Agent state telemetry | ✅ Main | `agent.state_change` events |
+| Daemon restart telemetry | ✅ Main | `daemon.restart` events |
+| Polecat spawn metric | ✅ Main | `gastown.polecat.spawns.total` |
 
-**Activation**: Requires `GT_LOG_AGENT_OUTPUT=true` AND `GT_OTEL_LOGS_URL` set to enable agent event streaming. See [Configuration](#environment-variables) section for details.
+### Molecule Lifecycle
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Molecule lifecycle telemetry | ❌ Roadmap | `mol.cook`/`mol.wisp`/`mol.squash`/`mol.burn` — no `RecordMol*` functions exist |
+| Bead creation telemetry | ❌ Roadmap | `bead.create` — no `RecordBeadCreate` function exists |
+| Formula instantiation telemetry | ✅ Main | `formula.instantiate` |
+| Convoy telemetry | ✅ Main | `convoy.create` events |
+
+### Agent Events (PR #2199)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Agent conversation events** | 🔲 PR #2199 | `agent.event` per conversation turn (text/tool_use/tool_result/thinking) |
+| **Token usage tracking** | 🔲 PR #2199 | `agent.usage` per assistant turn (input/output/cache_read/cache_creation) |
+| **Cloud session correlation** | 🔲 PR #2199 | `native_session_id` linking Claude to GT telemetry |
+| **Agent logging daemon** | 🔲 PR #2199 | `gt agent-log` detached process for JSONL streaming |
+| **`run.id` on all events** | 🔲 PR #2199 | `WithRunID`/`RunIDFromCtx`; `addRunID()` injects `run.id` into every log record |
+
+**Activation (PR #2199)**: Requires `GT_LOG_AGENT_OUTPUT=true` AND `GT_OTEL_LOGS_URL` set.
 
 ---
 
@@ -98,7 +100,7 @@ docker run -d -p 9428:9428 victoriametrics/victoria-logs
 
 ### P0 — Critical (blocking accurate attribution)
 
-**Work context injection at `gt prime`**
+**Work context injection at `gt prime`** — implemented in PR #2199
 
 Polecats are **generic agents** — they have no fixed rig. `GT_RIG` at session start reflects an allocation rig or is empty, which is meaningless for attributing work. The actual work context (which rig, bead, and molecule a polecat is processing) is only known at each `gt prime` invocation.
 
@@ -247,6 +249,8 @@ if err != nil {
 defer provider.Shutdown(ctx)
 ```
 
+**Exact signature**: `func Init(ctx context.Context, serviceName, serviceVersion string) (*Provider, error)`
+
 **Providers:**
 - **Metrics**: Any OTLP-compatible metrics backend via `otlpmetrichttp` exporter
 - **Logs**: Any OTLP-compatible logs backend via `otlploghttp` exporter
@@ -262,19 +266,28 @@ defer provider.Shutdown(ctx)
 - Protobuf encoding (VictoriaMetrics, Prometheus, and others accept this)
 - Compatible with any backend that supports OTLP v1.x+
 
-**Resource attributes** (set at init time):
-- `service.name`: "gastown"
-- `service.version`: GT binary version
-- `host`: system hostname
-- `os`: system OS info
+**Resource attributes** (set at init time by the OTel SDK):
 
-**Custom resource attributes** (via `OTEL_RESOURCE_ATTRIBUTES` env var):
-- `gt.role`: Agent role (`mayor`, `deacon`, `witness`, `polecat`, `crew`, etc.)
-- `gt.rig`: Rig name (e.g., `gastown`, `beads`)
-- `gt.actor`: BD actor/identity (`mayor`, `deacon/boot`, `beads/witness`, etc.)
-- `gt.agent`: Polecat/crew name (e.g., `Toast`, `max`)
-- `gt.session`: Tmux session name (e.g., `hq-mayor`, `gt-gastown-Toast`)
-- `gt.run_id`: Gas Town run UUID (correlation key for waterfall traces)
+| OTel attribute | Source |
+|---|---|
+| `service.name` | `"gastown"` (hardcoded at call site) |
+| `service.version` | GT binary version |
+| `host.name`, `host.arch` | `resource.WithHost()` — OTel SDK reads system hostname |
+| `os.type`, `os.version`, `os.description` | `resource.WithOS()` — OTel SDK reads OS info |
+
+**Custom resource attributes** (via `OTEL_RESOURCE_ATTRIBUTES` env var, set by `SetProcessOTELAttrs()`):
+
+| Attribute | Source env var | Notes |
+|---|---|---|
+| `gt.role` | `GT_ROLE` | Agent role (e.g. `gastown/polecats/Toast`) |
+| `gt.rig` | `GT_RIG` | Rig name |
+| `gt.actor` | `BD_ACTOR` | BD actor/identity |
+| `gt.agent` | `GT_POLECAT` or `GT_CREW` | Agent name |
+| `gt.session` | `GT_SESSION` | Tmux session name — **PR #2199** |
+| `gt.run_id` | `GT_RUN` | Run UUID — **PR #2199** |
+| `gt.work_rig` | `GT_WORK_RIG` | Work rig at last prime — **PR #2199** |
+| `gt.work_bead` | `GT_WORK_BEAD` | Hooked bead at last prime — **PR #2199** |
+| `gt.work_mol` | `GT_WORK_MOL` | Molecule step at last prime — **PR #2199** |
 
 ---
 
@@ -285,7 +298,9 @@ The recorder provides type-safe functions for emitting all GT telemetry events. 
 1. **OTel metric counter** (→ VictoriaMetrics, aggregated)
 2. **OTel log record** (→ VictoriaLogs, full detail)
 
-All events automatically carry `run.id` from context or `GT_RUN` env var for waterfall correlation.
+> **`run.id` on log records**: On main, log records do not carry `run.id`. After PR #2199
+> merges, `addRunID(ctx, &r)` will be called on every log record, injecting `run.id` from
+> context (set via `WithRunID`) or from the `GT_RUN` env var.
 
 #### Recording Pattern
 
@@ -300,7 +315,7 @@ func RecordSomething(ctx context.Context, args ..., err error) {
     emit(ctx, "something", severity(err),
         otellog.String("key1", value1),
         otellog.String("key2", value2),
-        statusStr(err),
+        otellog.String("status", status),
         errKV(err), // Empty string or error message
     )
 }
@@ -310,43 +325,13 @@ func RecordSomething(ctx context.Context, args ..., err error) {
 
 | Type | Description | Example |
 |------|-------------|---------|
-| Counters | Total counts per attribute combination | `gastown.polecat.spawns.total{rig="gastown", status="ok"}` |
+| Counters | Total counts per attribute combination | `gastown.polecat.spawns.total{status="ok"}` |
 | Histograms | Distribution of measurements (latency, duration) | `gastown.bd.duration_ms` |
-| Log records | Structured events with full payload | `agent.instantiate`, `mail`, `agent.event` |
+| Log records | Structured events with full payload | `prime`, `mail`, `agent.event` (PR #2199) |
 
 ---
 
 ### 3. Context Propagation
-
-#### Run ID (`gt.run_id`)
-
-Each agent session spawn generates a unique `GT_RUN` UUID. This is the primary correlation key:
-
-- **Inherited by subprocesses**: BD, mail, and native AI agent sessions all see `GT_RUN` |
-- **Propagated via context**: `telemetry.WithRunID(ctx, runID)` injects it into all telemetry
-- **Carried in OTEL_RESOURCE_ATTRIBUTES**: `gt.run_id` attribute for subprocess telemetry
-
-**Waterfall correlation diagram:**
-
-```mermaid
-flowchart TD
-    A[Session Start<br/>gt polecat add / gt sling ...<br/>GT_RUN=uuid-1234<br/>session.StartSession] --> B[Environment Setup<br/>GT_RUN env var<br/>OTEL_RESOURCE_ATTRIBUTES<br/>Subprocesses inherit]
-    B --> C[Agent Lifecycle<br/>1. agent.instantiate<br/>2. prime<br/>3. agent.events*<br/>(opt-in via GT_LOG_AGENT_OUTPUT=true)]
-    C --> D[Work Operations<br/>bd.call*<br/>mail<br/>sling<br/>done]
-    D --> E[VictoriaLogs Backend<br/>All events indexed<br/>by run.id]
-
-    style A fill:#e1f5ff
-    style B fill:#b8d4ff
-    style C fill:#8cc5ff
-    style D fill:#5aaaff
-    style E fill:#3388ff
-```
-
-**Query example:** Retrieve all events for a single session run
-```logsql
-run.id:uuid-1234
-```
-This returns the complete waterfall: `agent.instantiate` → `prime` → `bd.call`(s) → `agent.event`(s) → `mail` → `sling` → `done`
 
 #### Subprocess Integration (`internal/telemetry/subprocess.go`)
 
@@ -363,20 +348,37 @@ Two mechanisms ensure subprocess telemetry is correlated:
   - `OTEL_RESOURCE_ATTRIBUTES` (GT context attributes)
   - `BD_OTEL_METRICS_URL` (mirrors `GT_OTEL_METRICS_URL`)
   - `BD_OTEL_LOGS_URL` (mirrors `GT_OTEL_LOGS_URL`)
-  - `GT_RUN` (run ID for correlation)
+  - `GT_RUN` (run ID for correlation — **PR #2199**)
+
+#### Run ID Correlation (PR #2199)
+
+On main, there is no run-level correlation key in log records. PR #2199 adds:
+
+- `GT_RUN` env var — UUID generated at polecat spawn
+- `gt.run_id` in `OTEL_RESOURCE_ATTRIBUTES` — carried by all subprocesses
+- `WithRunID(ctx, runID)` / `RunIDFromCtx(ctx)` — Go context carrier
+- `addRunID(ctx, &record)` — called in every emit, injects `run.id` into log record
+
+**Query example (after PR #2199):** Retrieve all events for a single session run
+```logsql
+run.id:uuid-1234
+```
 
 ---
 
-### 4. Agent Logging (`internal/session/agent_logging_unix.go`)
+### 4. Agent Logging (PR #2199)
+
+> **Status: PR #2199 (`otel-p0-work-context`)** — not on main. The files below are added in PR #2199 and do not exist at `origin/main`.
 
 **Opt-in feature**: `GT_LOG_AGENT_OUTPUT=true` streams native AI agent JSONL to VictoriaLogs.
 
 **How it works:**
-1. `ActivateAgentLogging()` spawns detached `gt agent-log` process
+1. `ActivateAgentLogging()` (`internal/session/agent_logging_unix.go`) spawns detached `gt agent-log` process
 2. Uses `Setsid` so it survives parent process exit
 3. PID file at `/tmp/gt-agentlog-<session>.pid` ensures single instance
 4. `--since=now-60s` filters to only this session's Claude instance
-5. `gt agent-log` tails JSONL files and emits `RecordAgentEvent` for each
+5. `gt agent-log` (`internal/cmd/agent_log.go`) tails JSONL files and emits `RecordAgentEvent` for each
+6. `internal/agentlog/` package — adapters for claudecode and opencode JSONL formats
 
 **Events emitted:**
 - `agent.event`: One record per conversation turn (text, tool_use, tool_result, thinking)
@@ -396,8 +398,8 @@ Two mechanisms ensure subprocess telemetry is correlated:
 |----------|---------|-------------|
 | `GT_OTEL_METRICS_URL` | Operator | OTLP metrics endpoint (default: localhost:8428) |
 | `GT_OTEL_LOGS_URL` | Operator | OTLP logs endpoint (default: localhost:9428) |
-| `GT_LOG_AGENT_OUTPUT` | Operator | **Opt-in**: Stream Claude conversation events |
 | `GT_LOG_BD_OUTPUT` | Operator | **Opt-in**: Include bd stdout/stderr in `bd.call` records |
+| `GT_LOG_AGENT_OUTPUT` | Operator | **Opt-in (PR #2199)**: Stream Claude conversation events |
 
 ### Session Context Variables (Set by `session.StartSession`)
 
@@ -409,7 +411,7 @@ Two mechanisms ensure subprocess telemetry is correlated:
 | `GT_CREW` | `max`, `jane` | Crew member name |
 | `GT_SESSION` | `gt-gastown-Toast`, `hq-mayor` | Tmux session name |
 | `GT_AGENT` | `claudecode`, `codex` | Agent override (if specified) |
-| `GT_RUN` | UUID v4 | Run identifier — primary waterfall correlation key |
+| `GT_RUN` | UUID v4 | **PR #2199** — Run identifier, primary waterfall correlation key |
 | `GT_ROOT` | `/Users/pa/gt` | Town root path |
 | `CLAUDE_CONFIG_DIR` | `~/gt/.claude` | Runtime config directory (for agent overrides) |
 | `BD_ACTOR` | `<rig>/polecats/<name>` | BD actor identity (git author) |
@@ -431,24 +433,25 @@ See [OTel Data Model](otel-data-model.md) for the complete event schema, attribu
 | Area | Coverage |
 |-------|----------|
 | Agent session lifecycle | Full (start, stop, respawn) |
-| Agent instantiation | Full (all agents, with metadata) |
-| Tmux prompts/nudges | Full (content, debouncing) |
-| Agent conversation events | Partial - requires `GT_LOG_AGENT_OUTPUT=true` |
-| Token usage | Partial - requires `GT_LOG_AGENT_OUTPUT=true` |
+| Tmux prompts/nudges | Full (content length, debouncing — content not logged) |
 | BD operations | Full (all BD CLI calls) |
-| Mail operations | Full (send, read, archive, delete) |
+| Mail operations | Full (operation + status; message payload not recorded) |
 | Polecat lifecycle | Full (spawn, remove, state changes) |
-| Molecule lifecycle | Full (cook, wisp, squash, burn) |
-| Bead creation | Full (all child beads during instantiation) |
+| Formula instantiation | Full (formula name, bead ID) |
 | Convoy tracking | Full (auto-convoy creation) |
 | Daemon restarts | Full (witness/deacon-initiated) |
 | GT prime operations | Full (with formula context) |
+| Agent conversation events | 🔲 PR #2199 — requires `GT_LOG_AGENT_OUTPUT=true` |
+| Token usage | 🔲 PR #2199 — requires `GT_LOG_AGENT_OUTPUT=true` |
 
 ### Not Currently Monitored ❌
 
 | Area | Notes | Operational Impact |
 |-------|-------|-------------------|
 | **Generic polecat work context** | **Critical gap** — see [Generic Polecat Work Context](#generic-polecat-work-context-️) below | No work attribution on any event between two `gt prime` calls; token costs unattributable |
+| **Agent instantiation** | No `agent.instantiate` event (roadmap) | Cannot anchor a run to a specific agent spawn |
+| **Molecule lifecycle** | No `mol.cook/wisp/squash/burn` events (roadmap) | Cannot observe formula-to-wisp pipeline |
+| **Bead creation** | No `bead.create` event (roadmap) | Cannot trace child bead graph during molecule instantiation |
 | Dolt server health | Handled by pre-spawn health checks, but not exposed to telemetry | Database issues only detected at spawn time; no real-time health monitoring |
 | Refinery merge queue | Internal operation, not surfaced via telemetry | Cannot monitor merge backlog or detect bottlenecks |
 | Scheduler dispatch logs | Capacity-controlled dispatch cycles not exposed to telemetry | Cannot track dispatch efficiency, queue depth, or capacity utilization |
@@ -456,7 +459,6 @@ See [OTel Data Model](otel-data-model.md) for the complete event schema, attribu
 | Git operations (clone, checkout, etc.) | Git author/name is set, but individual operations not tracked | Cannot diagnose git-related failures or track repository operations |
 | Resource usage (CPU, memory, disk) | Not instrumented — consider OTel process metrics | Cannot detect resource exhaustion or capacity planning needs |
 | Network activity | Not instrumented (Claude API calls logged by agent, but external traffic not) | Cannot diagnose network issues or detect unusual external connections |
-| File system operations | Not instrumented (e.g., file reads/writes in session) | Cannot trace file system activity or diagnose I/O bottlenecks |
 | Cross-rig worktree operations | Worktrees are created/managed but operations not tracked | Cannot correlate worktree lifecycle with work items |
 | Witness monitoring loops | Health checks happen but not exposed to observability | Cannot monitor witness health trends or detect degraded performance |
 | Deacon watchdog chain | Internal state machine, not currently exposed to observability | Cannot track deacon health or detect daemon failures |
@@ -465,13 +467,13 @@ See [OTel Data Model](otel-data-model.md) for the complete event schema, attribu
 
 ## Generic Polecat Work Context ⚠️
 
-**Critical gap**: Polecats are generic agents with no fixed rig. `agent.instantiate.rig` reflects the allocation rig (or is empty), which has no bearing on the actual work being done. Work context is only determined at each `gt prime` invocation — and changes with every new work assignment.
+**Critical gap**: Polecats are generic agents with no fixed rig. `gt.rig` in resource attributes reflects the allocation rig (or is empty), which has no bearing on the actual work being done. Work context is only determined at each `gt prime` invocation — and changes with every new work assignment.
 
-This means all events emitted between two `gt prime` calls (`bd.call`, `mail`, `agent.event`, `sling`, `done`) have no work attribution today. You cannot answer "which bead did this `bd.call` serve?" from current telemetry.
+This means all events emitted between two `gt prime` calls (`bd.call`, `mail`, `sling`, `done`) have no work attribution today. You cannot answer "which bead did this `bd.call` serve?" from current telemetry.
 
 **Impact**:
-- `agent.instantiate.rig` is the allocation rig, not the work rig — misleading for multi-rig polecats
-- Token usage (`agent.usage`) cannot be attributed to a specific bead, rig, or molecule
+- `gt.rig` resource attribute is the allocation rig, not the work rig — misleading for multi-rig polecats
+- Token usage (`agent.usage`, PR #2199) cannot be attributed to a specific bead, rig, or molecule
 - `bd.call`, `mail`, `done` events carry no indication of which work item triggered them
 
 **Proposed solution** (see [Roadmap P0](#p0--critical-blocking-accurate-attribution)):
@@ -493,35 +495,36 @@ See [OTel Data Model](otel-data-model.md) for complete schema of all events.
 
 ### Metrics (Any OTLP-compatible backend)
 
-> These examples use PromQL, but equivalent query languages work with your chosen backend (VictoriaMetrics, Prometheus, Grafana Mimir, etc.)
+> These examples use PromQL/MetricsQL syntax, as supported by VictoriaMetrics, Prometheus, Grafana Mimir, etc.
 
 **Total counts by status:**
 ```promql
-sum(rate(gastown.polecat.spawns.total[5m])) by (status, rig)
-sum(rate(gastown.bd.calls.total[5m])) by (subcommand, status)
+sum(rate(gastown_polecat_spawns_total[5m])) by (status)
+sum(rate(gastown_bd_calls_total[5m])) by (subcommand, status)
 ```
+
+> **Naming note**: OTel SDK metric names use dot notation (e.g. `gastown.bd.calls.total`).
+> Prometheus-compatible backends export these with underscores (e.g. `gastown_bd_calls_total`).
+> Use underscore form in PromQL queries.
 
 **Latency distributions:**
 ```promql
-histogram_quantile(0.5, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
-histogram_quantile(0.95, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
-histogram_quantile(0.99, rate(gastown.bd.duration_ms_bucket[5m])) by (subcommand)
+histogram_quantile(0.5, rate(gastown_bd_duration_ms_bucket[5m])) by (subcommand)
+histogram_quantile(0.95, rate(gastown_bd_duration_ms_bucket[5m])) by (subcommand)
+histogram_quantile(0.99, rate(gastown_bd_duration_ms_bucket[5m])) by (subcommand)
 ```
 
-**Waterfall by run:**
+**Session activity:**
 ```promql
-sum(increase(gastown.session.starts.total)) by (run.id)
-sum(increase(gastown.prompt.sends.total)) by (run.id)
-sum(increase(gastown.agent.events.total)) by (run.id, event_type)
+sum(increase(gastown_session_starts_total[1h])) by (role)
+sum(increase(gastown_done_total[1h])) by (exit_type)
 ```
 
 ### VictoriaLogs (Structured Logs)
 
-**Find all events for a run:**
+**Find all events from a polecat:**
 ```logsql
-_msg:agent.instantiate AND run.id:uuid-1234
-_msg:agent.event AND run.id:uuid-1234
-_msg:bd.call AND run.id:uuid-1234
+gt.agent:Toast
 ```
 
 **Error analysis:**
@@ -542,7 +545,7 @@ _msg:agent.state_change AND new_state:working
 
 **Track a polecat working across multiple rigs:**
 ```logsql
-agent_name:Toast
+gt.agent:Toast
 ```
 Shows all events from polecat Toast, regardless of rig assignment.
 
@@ -551,17 +554,9 @@ Shows all events from polecat Toast, regardless of rig assignment.
 _msg:bd.call AND status:error
 ```
 
-**Find sessions where tokens are consumed but no work is completed:**
+**Find all events for a run (after PR #2199):**
 ```logsql
-_msg:agent.usage
-_msg:done
-```
-Correlate token usage with work completion (done events) within the same time window.
-
-**Cross-rig work analysis** (future, once work context is implemented):
-```logsql
-_msg:agent.instantiate AND role:polecat
-_msg:bd.call AND subcommand:update AND work_rig:gastown
+run.id:uuid-1234
 ```
 
 ---
@@ -589,3 +584,111 @@ _msg:bd.call AND subcommand:update AND work_rig:gastown
 - Advanced processing and batching
 - Support for multiple backends simultaneously
 - Better resource efficiency than per-process exporters
+
+---
+
+## Appendix: Source Reference Audit
+
+Audited against `origin/main` @ `2d8d71ee35fafda3bbdf353683692bfcc9165476`
+
+### Initialization (`internal/telemetry/telemetry.go`)
+
+| Claim | Source |
+|-------|--------|
+| `func Init(ctx context.Context, serviceName, serviceVersion string) (*Provider, error)` | `telemetry.go:104` |
+| `func (p *Provider) Shutdown(ctx context.Context) error` | `telemetry.go:68` |
+| `EnvMetricsURL = "GT_OTEL_METRICS_URL"` | `telemetry.go:36` |
+| `EnvLogsURL = "GT_OTEL_LOGS_URL"` | `telemetry.go:39` |
+| `DefaultMetricsURL = "http://localhost:8428/opentelemetry/api/v1/push"` | `telemetry.go:42` |
+| `DefaultLogsURL = "http://localhost:9428/insert/opentelemetry/v1/logs"` | `telemetry.go:45` |
+| `semconv.ServiceName(serviceName)` — resource attr | `telemetry.go:129` |
+| `semconv.ServiceVersion(serviceVersion)` — resource attr | `telemetry.go:130` |
+| `resource.WithHost()` — produces `host.name`, `host.arch` | `telemetry.go:132` |
+| `resource.WithOS()` — produces `os.type`, `os.version`, `os.description` | `telemetry.go:133` |
+| Both endpoints unset → telemetry disabled (no providers created) | `telemetry.go:115–120` |
+
+### Subprocess correlation (`internal/telemetry/subprocess.go`)
+
+| Claim | Source |
+|-------|--------|
+| `func buildGTResourceAttrs() string` | `subprocess.go:11` |
+| `GT_ROLE` → `gt.role` | `subprocess.go:13` |
+| `GT_RIG` → `gt.rig` | `subprocess.go:16` |
+| `BD_ACTOR` → `gt.actor` | `subprocess.go:19` |
+| `GT_POLECAT` → `gt.agent` | `subprocess.go:23` |
+| `GT_CREW` → `gt.agent` (fallback) | `subprocess.go:25` |
+| `func SetProcessOTELAttrs()` | `subprocess.go:42` |
+| Sets `OTEL_RESOURCE_ATTRIBUTES` | `subprocess.go:48` |
+| Sets `BD_OTEL_METRICS_URL` | `subprocess.go:52` |
+| Sets `BD_OTEL_LOGS_URL` | `subprocess.go:54` |
+| `func OTELEnvForSubprocess() []string` | `subprocess.go:66` |
+
+### Recording (`internal/telemetry/recorder.go`)
+
+| Claim | Source |
+|-------|--------|
+| `func emit(ctx, body, sev, attrs...)` | `recorder.go:133` |
+| `initInstruments()` — all instruments initialized here | `recorder.go:59` |
+| `GT_LOG_BD_OUTPUT` gates stdout/stderr logging | `recorder.go:208` |
+| `RecordBDCall` / `bd.call` event | `recorder.go:187` |
+| `RecordSessionStart` / `session.start` event | `recorder.go:218` |
+| `RecordSessionStop` / `session.stop` event | `recorder.go:236` |
+| `RecordPromptSend` / `prompt.send` event — `keys_len` only, content not logged | `recorder.go:250` |
+| `RecordPaneRead` / `pane.read` event | `recorder.go:266` |
+| `RecordPrime` / `prime` event | `recorder.go:282` |
+| `RecordPrimeContext` / `prime.context` event | `recorder.go:305` |
+| `RecordAgentStateChange` / `agent.state_change` — `has_hook_bead` bool | `recorder.go:318` |
+| `RecordPolecatSpawn` / `polecat.spawn` event | `recorder.go:338` |
+| `RecordPolecatRemove` / `polecat.remove` event | `recorder.go:352` |
+| `RecordSling` / `sling` event | `recorder.go:366` |
+| `RecordMail` / `mail` event — `operation`, `status`, `error` only | `recorder.go:381` |
+| `RecordNudge` / `nudge` event | `recorder.go:398` |
+| `RecordDone` / `done` event | `recorder.go:413` |
+| `RecordDaemonRestart` / `daemon.restart` event | `recorder.go:431` |
+| `RecordFormulaInstantiate` / `formula.instantiate` event | `recorder.go:442` |
+| `RecordConvoyCreate` / `convoy.create` event | `recorder.go:460` |
+| `RecordPaneOutput` / `pane.output` event | `recorder.go:477` |
+
+### Absent functions and features (confirmed by grep on `origin/main`)
+
+| Claim | Verification |
+|-------|-------------|
+| `RecordAgentInstantiate` / `agent.instantiate` — does not exist | `grep -r "RecordAgentInstantiate\|agent\.instantiate" internal/ → zero matches` |
+| `RecordMolCook` / `mol.cook` etc. — do not exist | `grep -r "RecordMol\|mol\.cook\|mol\.wisp\|mol\.squash\|mol\.burn" internal/ → zero matches` |
+| `RecordBeadCreate` / `bead.create` — does not exist | `grep -r "RecordBeadCreate\|bead\.create" internal/ → zero matches` |
+| `WithRunID` / `RunIDFromCtx` — do not exist on main | `grep -r "WithRunID\|RunIDFromCtx" internal/telemetry/ → zero matches` |
+| `GT_RUN` — does not exist on main | `grep -r "GT_RUN" internal/ → zero matches` |
+| `GT_LOG_AGENT_OUTPUT` — does not exist on main | `grep -r "GT_LOG_AGENT_OUTPUT" . → zero matches` |
+| `gt.session` / `gt.run_id` in resource attrs — not in subprocess.go on main | confirmed: `subprocess.go` has only `gt.role`, `gt.rig`, `gt.actor`, `gt.agent` |
+| `agent_logging_unix.go` — does not exist on main | `find internal/session/ -name "agent_logging*" → zero results` |
+| `agent_log.go` — does not exist on main | `find internal/cmd/ -name "agent_log*" → zero results` |
+| `telemetry.IsActive()` — does not exist on main | `grep -r "IsActive" internal/telemetry/ → zero matches` |
+
+### PromQL naming convention
+
+OTel SDK uses dot notation; Prometheus-compatible backends export with underscores.
+
+| SDK name | PromQL / MetricsQL name |
+|----------|------------------------|
+| `gastown.bd.calls.total` | `gastown_bd_calls_total` |
+| `gastown.bd.duration_ms` | `gastown_bd_duration_ms_bucket` / `_sum` / `_count` |
+| `gastown.polecat.spawns.total` | `gastown_polecat_spawns_total` |
+| `gastown.session.starts.total` | `gastown_session_starts_total` |
+| `gastown.done.total` | `gastown_done_total` |
+
+### PR #2199 additions (commit `8b88de15`, not yet on main)
+
+| Claim | Source |
+|-------|--------|
+| `RecordAgentEvent` / `agent.event` | added in `8b88de15` |
+| `RecordAgentTokenUsage` / `agent.usage` | added in `8b88de15` |
+| `gastown.agent.events.total` Counter | added in `8b88de15` |
+| `WithRunID` / `RunIDFromCtx` / `addRunID` | added in `8b88de15` |
+| `gt.session`, `gt.run_id`, `gt.work_*` in resource attrs | `subprocess.go` updated in `8b88de15` |
+| `GT_RUN` propagation to subprocesses | `subprocess.go` updated in `8b88de15` |
+| `injectWorkContext` / `setTmuxWorkContext` in `prime.go` | added in `8b88de15` |
+| `internal/agentlog/` package | new in `8b88de15` |
+| `internal/cmd/agent_log.go` | new in `8b88de15` |
+| `internal/session/agent_logging_unix.go` | new in `8b88de15` |
+| `GT_LOG_AGENT_OUTPUT` env var | new in `8b88de15` |
+| `telemetry.IsActive()` | added in `8b88de15` |
