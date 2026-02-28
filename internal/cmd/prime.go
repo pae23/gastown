@@ -14,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
-	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/lock"
 	"github.com/steveyegge/gastown/internal/state"
 	"github.com/steveyegge/gastown/internal/style"
@@ -148,11 +147,18 @@ func runPrime(cmd *cobra.Command, args []string) (retErr error) {
 		return err
 	}
 
+	// P0: Fetch work context once — used for both OTel attribution and output.
+	// injectWorkContext sets GT_WORK_RIG/BEAD/MOL in the current process env and
+	// in the tmux session env so all subsequent subprocesses (bd, mail, …) carry
+	// the correct work attribution until the next gt prime overwrites it.
+	hookedBead := findAgentWork(ctx)
+	injectWorkContext(ctx, hookedBead)
+
 	// Compact/resume: lighter prime that skips verbose role context.
 	// The agent already has role docs in compressed memory — just restore
 	// identity, hook status, and any new mail.
 	if isCompactResume() {
-		runPrimeCompactResume(ctx, cwd)
+		runPrimeCompactResume(ctx, cwd, hookedBead)
 		return nil
 	}
 
@@ -165,7 +171,7 @@ func runPrime(cmd *cobra.Command, args []string) (retErr error) {
 	// started with. Only emitted when GT telemetry is active (GT_OTEL_LOGS_URL set).
 	telemetry.RecordPrimeContext(context.Background(), formula, os.Getenv("GT_ROLE"), primeHookMode)
 
-	hasSlungWork := checkSlungWork(ctx)
+	hasSlungWork := checkSlungWork(ctx, hookedBead)
 	explain(hasSlungWork, "Autonomous mode: hooked/in-progress work detected")
 
 	outputMoleculeContext(ctx)
@@ -191,7 +197,10 @@ func runPrime(cmd *cobra.Command, args []string) (retErr error) {
 // Unlike the full prime path, this uses a continuation directive instead of
 // the full AUTONOMOUS WORK MODE block. This prevents agents from re-announcing
 // and re-initializing after compaction. (GH#1965)
-func runPrimeCompactResume(ctx RoleContext, cwd string) {
+//
+// hookedBead is pre-fetched by the caller (runPrime) to avoid a redundant
+// findAgentWork call and ensure work context is injected before this runs.
+func runPrimeCompactResume(ctx RoleContext, cwd string, hookedBead *beads.Issue) {
 	// Brief identity confirmation
 	actor := getAgentIdentity(ctx)
 	source := primeHookSource
@@ -204,9 +213,8 @@ func runPrimeCompactResume(ctx RoleContext, cwd string) {
 	// Session metadata for seance
 	outputSessionMetadata(ctx)
 
-	// Find hooked work and output continuation directive (not full autonomous startup).
+	// Output continuation directive (not full autonomous startup).
 	// The agent already knows what it was doing — just remind it of the hook.
-	hookedBead := findAgentWork(ctx)
 	if hookedBead != nil {
 		attachment := beads.ParseAttachmentFields(hookedBead)
 		hasMolecule := attachment != nil && attachment.AttachedMolecule != ""
@@ -418,8 +426,10 @@ func runMailCheckInject(workDir string) {
 // checkSlungWork checks for hooked work on the agent's hook.
 // If found, displays AUTONOMOUS WORK MODE and tells the agent to execute immediately.
 // Returns true if hooked work was found (caller should skip normal startup directive).
-func checkSlungWork(ctx RoleContext) bool {
-	hookedBead := findAgentWork(ctx)
+//
+// hookedBead is pre-fetched by the caller (runPrime) via findAgentWork to avoid a
+// redundant lookup and ensure work context is already injected before output runs.
+func checkSlungWork(ctx RoleContext, hookedBead *beads.Issue) bool {
 	if hookedBead == nil {
 		return false
 	}
@@ -558,9 +568,9 @@ func outputAutonomousDirective(ctx RoleContext, hookedBead *beads.Issue, hasMole
 	fmt.Println("1. Announce: \"" + roleAnnounce + "\" (ONE line, no elaboration)")
 
 	if hasMolecule {
-		fmt.Println("2. This bead has an ATTACHED FORMULA (workflow checklist)")
-		fmt.Println("3. Work through formula steps in order — see checklist below")
-		fmt.Println("4. When all steps complete, run `" + cli.Name() + " done`")
+		fmt.Println("2. This bead has an ATTACHED MOLECULE (formula workflow)")
+		fmt.Println("3. Work through molecule steps in order - see CURRENT STEP below")
+		fmt.Println("4. Close each step with `bd close <step-id>`, then check `bd mol current` for next step")
 	} else {
 		fmt.Printf("2. Then IMMEDIATELY run: `bd show %s`\n", hookedBead.ID)
 		fmt.Println("3. Begin execution - no waiting for user input")
@@ -572,7 +582,7 @@ func outputAutonomousDirective(ctx RoleContext, hookedBead *beads.Issue, hasMole
 	fmt.Println("- Describe what you're going to do")
 	fmt.Println("- Check mail first (hook takes priority)")
 	if hasMolecule {
-		fmt.Println("- Skip formula steps or work on the base bead directly")
+		fmt.Println("- Skip molecule steps or work on the base bead directly")
 	}
 	fmt.Println()
 }
@@ -599,13 +609,8 @@ func outputHookedBeadDetails(hookedBead *beads.Issue) {
 
 // outputMoleculeWorkflow displays attached molecule context with current step.
 func outputMoleculeWorkflow(ctx RoleContext, attachment *beads.AttachmentFields) {
-	fmt.Printf("%s\n\n", style.Bold.Render("## 🧬 ATTACHED FORMULA (WORKFLOW CHECKLIST)"))
-	if attachment.AttachedFormula != "" {
-		fmt.Printf("Formula: %s\n", attachment.AttachedFormula)
-	}
-	if attachment.AttachedMolecule != "" {
-		fmt.Printf("Molecule ID: %s\n", attachment.AttachedMolecule)
-	}
+	fmt.Printf("%s\n\n", style.Bold.Render("## 🧬 ATTACHED MOLECULE (FORMULA WORKFLOW)"))
+	fmt.Printf("Molecule ID: %s\n", attachment.AttachedMolecule)
 	if attachment.AttachedArgs != "" {
 		fmt.Printf("\n%s\n", style.Bold.Render("📋 ARGS (use these to guide execution):"))
 		fmt.Printf("  %s\n", attachment.AttachedArgs)
@@ -618,19 +623,10 @@ func outputMoleculeWorkflow(ctx RoleContext, attachment *beads.AttachmentFields)
 		return
 	}
 
-	// Show inline formula steps from the embedded binary (root-only: no child wisps to query).
-	if attachment.AttachedFormula != "" {
-		showFormulaStepsFull(attachment.AttachedFormula)
-		fmt.Println()
-		fmt.Printf("%s\n", style.Bold.Render("Work through the checklist above. When all steps complete, run `"+cli.Name()+" done`."))
-		fmt.Println("The base bead is your assignment. The formula steps define your workflow.")
-		return
-	}
-
-	// Legacy path: no formula name stored, fall back to bd mol current
 	showMoleculeExecutionPrompt(ctx.WorkDir, attachment.AttachedMolecule)
+
 	fmt.Println()
-	fmt.Printf("%s\n", style.Bold.Render("Follow the molecule steps above, NOT the base bead."))
+	fmt.Printf("%s\n", style.Bold.Render("⚠️  IMPORTANT: Follow the molecule steps above, NOT the base bead."))
 	fmt.Println("The base bead is just a container. The molecule steps define your workflow.")
 }
 
@@ -862,6 +858,71 @@ func ensureBeadsRedirect(ctx RoleContext) {
 
 	// Use shared helper - silently ignore errors during prime
 	_ = beads.SetupRedirect(ctx.TownRoot, ctx.WorkDir)
+}
+
+// injectWorkContext extracts the current work context (rig, bead, molecule) from the
+// hooked bead and persists it in two places so all subsequent subprocesses carry it:
+//
+//  1. Current process env (GT_WORK_RIG/BEAD/MOL via os.Setenv) — inherited by bd, mail,
+//     and any other subprocess spawned from this gt prime invocation (e.g. bd prime).
+//
+//  2. Tmux session env (via tmux set-environment) — inherited by future processes
+//     spawned in the session after a handoff or compaction (e.g. new Claude Code instance).
+//
+// These values are then read by telemetry.RecordPrime (defer in runPrime) and by
+// telemetry.buildGTResourceAttrs which injects them into OTEL_RESOURCE_ATTRIBUTES for
+// bd subprocesses launched from the Go SDK.
+//
+// When hookedBead is nil (no work on hook), the vars are cleared so stale context
+// from a previous prime cycle does not leak into the current one.
+// No-op in dry-run mode.
+func injectWorkContext(ctx RoleContext, hookedBead *beads.Issue) {
+	if primeDryRun || !telemetry.IsActive() {
+		return
+	}
+	workRig := ""
+	workBead := ""
+	workMol := ""
+	if hookedBead != nil {
+		workRig = ctx.Rig
+		workBead = hookedBead.ID
+		if attachment := beads.ParseAttachmentFields(hookedBead); attachment != nil {
+			workMol = attachment.AttachedMolecule
+		}
+	}
+	_ = os.Setenv("GT_WORK_RIG", workRig)
+	_ = os.Setenv("GT_WORK_BEAD", workBead)
+	_ = os.Setenv("GT_WORK_MOL", workMol)
+	setTmuxWorkContext(workRig, workBead, workMol)
+}
+
+// setTmuxWorkContext writes GT_WORK_RIG, GT_WORK_BEAD, GT_WORK_MOL into the current
+// tmux session environment. Future processes spawned in the session (e.g. a new
+// Claude Code instance after handoff/compaction) will inherit these values automatically.
+// Empty values unset the variable in the session env to prevent stale context leaking
+// across prime cycles. No-op when not running inside a tmux session.
+func setTmuxWorkContext(workRig, workBead, workMol string) {
+	if os.Getenv("TMUX") == "" {
+		return
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	if err != nil {
+		return
+	}
+	session := strings.TrimSpace(string(out))
+	if session == "" {
+		return
+	}
+	setOrUnset := func(key, value string) {
+		if value != "" {
+			_ = exec.Command("tmux", "set-environment", "-t", session, key, value).Run()
+		} else {
+			_ = exec.Command("tmux", "set-environment", "-u", "-t", session, key).Run()
+		}
+	}
+	setOrUnset("GT_WORK_RIG", workRig)
+	setOrUnset("GT_WORK_BEAD", workBead)
+	setOrUnset("GT_WORK_MOL", workMol)
 }
 
 // checkPendingEscalations queries for open escalation beads and displays them prominently.
