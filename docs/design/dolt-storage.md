@@ -358,6 +358,40 @@ CALL dolt_gc();
 GC is memory-hungry but our databases are small, so no concern (Tim Sehn,
 2026-02-28).
 
+### Dolt Scheduled Events (Spike Results, 2026-02-28)
+
+Dolt supports MySQL-style `CREATE EVENT` for server-maintained cron jobs.
+Reference: https://www.dolthub.com/blog/2023-10-02-scheduled-events/
+
+**Tested on Dolt 1.82.6:**
+- `CREATE EVENT ... EVERY 1 DAY DO CALL dolt_gc()` — works
+- Events persist in `dolt_schemas` table — survive server restart
+- Events only fire on the `main` branch
+- Stored procedures work (`CREATE PROCEDURE` with DECLARE, BEGIN...END)
+- Events can call stored procedures
+- Minimum interval: 30 seconds (Dolt enforces this floor)
+
+**Can scheduled events replace the Compactor Dog?**
+
+**No.** The Compactor Dog's 10-step flatten algorithm requires safety features
+that SQL events cannot provide:
+- Threshold checking (only compact when commit count exceeds N)
+- Integrity verification (row count comparison pre/post)
+- Concurrency abort (detects if main HEAD moved during compaction)
+- Error escalation (notifies Mayor on failure)
+- Cross-database iteration (single patrol handles all DBs)
+- Daemon-level logging and observability
+
+A stored procedure could implement the raw flatten SQL, but lacks escalation,
+observability, and integration with the daemon lifecycle.
+
+**What scheduled events CAN do:**
+- Supplement the Compactor Dog with explicit `dolt_gc()` scheduling
+- But auto-gc is already ON by default since Dolt 1.75.0, making this redundant
+
+**Recommendation:** Keep the Compactor Dog for flatten. Auto-gc handles chunk
+reclamation. Scheduled events add no value beyond what we already have.
+
 ### Pollution Prevention
 
 Pollution enters Dolt via four vectors:
