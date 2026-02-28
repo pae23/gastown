@@ -365,6 +365,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Check for cross-socket zombie sessions on the default socket.
+	// After the socket isolation fix (gt-qkekp), agent sessions created on the
+	// wrong socket may still be running. Warn the user so they can clean up.
+	warnCrossSocketZombies()
+
 	// Ensure keybindings (prefix+g, prefix+a) work on all tmux sockets.
 	// Agent sessions live on the town socket (e.g., -L gt), but the user may be
 	// attached to the default socket. Without this, prefix+g only works on the
@@ -919,4 +924,38 @@ func waitForDoltReady(townRoot string) {
 	if err := doltserver.WaitForReady(townRoot, doltReadyTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v (agents may see connection errors)\n", err)
 	}
+}
+
+// warnCrossSocketZombies checks for Gas Town agent sessions on the default tmux
+// socket when a separate town socket exists. These are leftovers from before the
+// socket isolation fix (gt-qkekp) and should be cleaned up.
+func warnCrossSocketZombies() {
+	townSocket := tmux.GetDefaultSocket()
+	if townSocket == "" || townSocket == "default" {
+		return // No cross-socket scenario
+	}
+
+	defaultTmux := tmux.NewTmuxWithSocket("default")
+	sessions, err := defaultTmux.ListSessions()
+	if err != nil {
+		return // No default socket server or error — nothing to warn about
+	}
+
+	var zombies []string
+	for _, sess := range sessions {
+		if sess != "" && session.IsKnownSession(sess) {
+			zombies = append(zombies, sess)
+		}
+	}
+
+	if len(zombies) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("%s Found %d agent session(s) on default socket (should be on %s socket)\n",
+		style.Bold.Render("⚠"), len(zombies), townSocket)
+	fmt.Printf("  These are zombie sessions from before socket isolation was fixed.\n")
+	fmt.Printf("  Clean up with: %s\n", style.Dim.Render("gt down --all  # or: gt doctor --fix"))
+	fmt.Println()
 }

@@ -290,6 +290,21 @@ func runDown(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Phase 5b: Cross-socket zombie sweep (--all or --force)
+	// After the socket isolation fix (gt-qkekp), agent sessions may remain on the
+	// default socket. Sweep them when doing a full shutdown.
+	if (downAll || downForce) && !downDryRun {
+		swept := sweepCrossSocketZombies()
+		if swept > 0 {
+			fmt.Printf("  Swept %d cross-socket zombie session(s) from default socket\n", swept)
+		}
+	} else if (downAll || downForce) && downDryRun {
+		count := countCrossSocketZombies()
+		if count > 0 {
+			fmt.Printf("  Would sweep %d cross-socket zombie session(s) from default socket\n", count)
+		}
+	}
+
 	// Phase 6: Nuke tmux server (--nuke only)
 	// With per-town tmux sockets, this only kills this town's tmux server,
 	// not other towns or the default socket. However, users may have opened
@@ -543,5 +558,65 @@ func findOrphanedClaudeProcesses(townRoot string) []int {
 	}
 
 	return orphaned
+}
+
+// sweepCrossSocketZombies kills Gas Town agent sessions on the default tmux socket.
+// After the socket isolation fix (gt-qkekp), agent sessions may have been created
+// on the default socket instead of the town socket. This sweeps them during shutdown.
+// Only kills sessions that match Gas Town naming patterns; user sessions are preserved.
+// Returns the number of sessions killed.
+func sweepCrossSocketZombies() int {
+	townSocket := tmux.GetDefaultSocket()
+	if townSocket == "" || townSocket == "default" {
+		return 0 // No cross-socket scenario
+	}
+
+	defaultTmux := tmux.NewTmuxWithSocket("default")
+	sessions, err := defaultTmux.ListSessions()
+	if err != nil {
+		return 0 // No default socket server or error
+	}
+
+	killed := 0
+	for _, sess := range sessions {
+		if sess == "" {
+			continue
+		}
+		if !session.IsKnownSession(sess) {
+			continue // Not a Gas Town session — preserve it
+		}
+
+		_ = events.LogFeed(events.TypeSessionDeath, sess,
+			events.SessionDeathPayload(sess, "unknown", "cross-socket sweep", "gt down"))
+
+		if err := defaultTmux.KillSessionWithProcesses(sess); err == nil {
+			killed++
+		}
+	}
+
+	return killed
+}
+
+// countCrossSocketZombies counts Gas Town agent sessions on the default tmux socket
+// without killing them. Used for dry-run mode.
+func countCrossSocketZombies() int {
+	townSocket := tmux.GetDefaultSocket()
+	if townSocket == "" || townSocket == "default" {
+		return 0
+	}
+
+	defaultTmux := tmux.NewTmuxWithSocket("default")
+	sessions, err := defaultTmux.ListSessions()
+	if err != nil {
+		return 0
+	}
+
+	count := 0
+	for _, sess := range sessions {
+		if sess != "" && session.IsKnownSession(sess) {
+			count++
+		}
+	}
+	return count
 }
 
