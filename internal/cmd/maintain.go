@@ -21,14 +21,12 @@ import (
 const (
 	// defaultMaintainThreshold is the minimum commit count before flatten triggers.
 	defaultMaintainThreshold = 100
-	// maintainGCTimeout is the timeout for dolt gc on a single database.
+	// maintainGCTimeout is the timeout for CALL dolt_gc() on a single database.
 	maintainGCTimeout = 5 * time.Minute
 	// maintainBackupTimeout is the timeout for dolt backup sync on a single database.
 	maintainBackupTimeout = 2 * time.Minute
 	// maintainQueryTimeout is the timeout for individual SQL queries during flatten.
 	maintainQueryTimeout = 30 * time.Second
-	// maintainBranchName is the temporary branch used during flatten.
-	maintainBranchName = "gt-maintain"
 )
 
 var (
@@ -43,15 +41,13 @@ var maintainCmd = &cobra.Command{
 	Short:   "Run full Dolt maintenance (reap + flatten + gc)",
 	Long: `Run the full Dolt maintenance pipeline in a single command.
 
-This encapsulates the manual reap+flatten+gc procedure:
-  1. Park all rigs (stop witnesses/refineries)
-  2. Backup all databases (dolt backup sync)
-  3. Reap closed wisps from each database
-  4. Flatten databases over commit threshold
-  5. Stop Dolt server
-  6. Run dolt gc on each database
-  7. Restart Dolt server
-  8. Unpark all rigs
+All operations run via SQL on the running server — no downtime needed.
+
+This encapsulates the maintenance procedure:
+  1. Backup all databases (dolt backup sync)
+  2. Reap closed wisps from each database
+  3. Flatten databases over commit threshold
+  4. Run dolt_gc() on each database
 
 Use --force for non-interactive mode (daemon/cron), or run interactively
 to review the plan before proceeding.
@@ -156,32 +152,9 @@ func runMaintain(cmd *cobra.Command, args []string) error {
 	}
 
 	start := time.Now()
-	serverStopped := false
 
-	// Phase 1: Park all rigs.
-	fmt.Printf("\n%s Parking rigs...\n", style.Bold.Render("●"))
-	parkedRigs := maintainParkRigs(townRoot)
-
-	// Deferred cleanup: restart server (if stopped) + unpark rigs.
-	defer func() {
-		if serverStopped {
-			fmt.Printf("\n%s Restarting server...\n", style.Bold.Render("●"))
-			if startErr := doltserver.Start(townRoot); startErr != nil {
-				fmt.Printf("  %s Failed to restart: %v\n", style.Bold.Render("✗"), startErr)
-				fmt.Printf("  Start manually with: %s\n", style.Dim.Render("gt dolt start"))
-			} else {
-				fmt.Printf("  %s Server restarted\n", style.Bold.Render("✓"))
-			}
-		}
-		if len(parkedRigs) > 0 {
-			fmt.Printf("\n%s Unparking rigs...\n", style.Bold.Render("●"))
-			for _, name := range parkedRigs {
-				if err := unparkOneRig(name); err != nil {
-					fmt.Printf("  %s Failed to unpark %s: %v\n", style.Warning.Render("!"), name, err)
-				}
-			}
-		}
-	}()
+	// No need to park rigs or stop the server — all operations (flatten, gc)
+	// are safe on a running server per Tim Sehn (2026-02-28).
 
 	// Phase 2: Backup.
 	if backupCount > 0 {
@@ -233,32 +206,17 @@ func runMaintain(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Phase 5: GC (server down).
-	fmt.Printf("\n%s Stopping server for GC...\n", style.Bold.Render("●"))
-	if err := doltserver.Stop(townRoot); err != nil {
-		if stillRunning, _, _ := doltserver.IsRunning(townRoot); !stillRunning {
-			fmt.Printf("  %s Server already stopped\n", style.Bold.Render("~"))
-			serverStopped = true
-		} else {
-			fmt.Printf("  %s Could not stop server — skipping GC: %v\n", style.Warning.Render("!"), err)
-		}
-	} else {
-		fmt.Printf("  %s Server stopped\n", style.Bold.Render("✓"))
-		serverStopped = true
-	}
-
+	// Phase 5: GC (safe on running server — no downtime needed).
 	gcCount := 0
-	if serverStopped {
-		fmt.Printf("\n%s Running GC...\n", style.Bold.Render("●"))
-		for _, db := range dbInfos {
-			gcStart := time.Now()
-			if err := maintainGCDatabase(config.DataDir, db.name); err != nil {
-				fmt.Printf("  %s %s: gc failed: %v\n", style.Warning.Render("!"), db.name, err)
-			} else {
-				fmt.Printf("  %s %s: gc completed (%v)\n",
-					style.Bold.Render("✓"), db.name, time.Since(gcStart).Round(time.Millisecond))
-				gcCount++
-			}
+	fmt.Printf("\n%s Running GC (via SQL on running server)...\n", style.Bold.Render("●"))
+	for _, db := range dbInfos {
+		gcStart := time.Now()
+		if err := maintainGCDatabase(config, db.name); err != nil {
+			fmt.Printf("  %s %s: gc failed: %v\n", style.Warning.Render("!"), db.name, err)
+		} else {
+			fmt.Printf("  %s %s: gc completed (%v)\n",
+				style.Bold.Render("✓"), db.name, time.Since(gcStart).Round(time.Millisecond))
+			gcCount++
 		}
 	}
 
@@ -337,7 +295,9 @@ func maintainOpenDB(config *doltserver.Config, dbName string) (*sql.DB, error) {
 }
 
 // maintainFlattenDB flattens a database's commit history to a single commit.
-// Uses the same algorithm as gt dolt flatten and the compactor dog.
+// Uses direct SQL on the running server — no branches, no downtime.
+// Per Tim Sehn (2026-02-28): DOLT_RESET --soft + DOLT_COMMIT is safe on a
+// running server. Concurrent writes during flatten are safe.
 func maintainFlattenDB(config *doltserver.Config, dbName string) error {
 	db, err := maintainOpenDB(config, dbName)
 	if err != nil {
@@ -354,11 +314,7 @@ func maintainFlattenDB(config *doltserver.Config, dbName string) error {
 		return fmt.Errorf("connection check: %w", err)
 	}
 
-	// Pre-flight: record HEAD and row counts.
-	preHead, err := flattenGetHead(db, dbName)
-	if err != nil {
-		return fmt.Errorf("pre-flight HEAD: %w", err)
-	}
+	// Pre-flight: record row counts for integrity verification.
 	preCounts, err := flattenGetRowCounts(db, dbName)
 	if err != nil {
 		return fmt.Errorf("pre-flight row counts: %w", err)
@@ -377,118 +333,52 @@ func maintainFlattenDB(config *doltserver.Config, dbName string) error {
 		return fmt.Errorf("use database: %w", err)
 	}
 
-	// Clean up any leftover branch from a previous failed run.
-	_, _ = db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_BRANCH('-D', '%s')", maintainBranchName))
-
-	// Create temp branch and checkout.
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_CHECKOUT('-b', '%s')", maintainBranchName)); err != nil {
-		return fmt.Errorf("create branch: %w", err)
-	}
-
-	// Soft-reset to root (keeps all data staged).
+	// Soft-reset to root on main — all data remains staged.
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_RESET('--soft', '%s')", rootHash)); err != nil {
-		flattenCleanup(db, maintainBranchName)
 		return fmt.Errorf("soft reset: %w", err)
 	}
 
 	// Commit flattened data.
 	commitMsg := fmt.Sprintf("maintain: flatten %s history", dbName)
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_COMMIT('-Am', '%s')", commitMsg)); err != nil {
-		flattenCleanup(db, maintainBranchName)
 		return fmt.Errorf("commit: %w", err)
 	}
 
 	// Verify integrity: row counts must match pre-flight.
 	postCounts, err := flattenGetRowCounts(db, dbName)
 	if err != nil {
-		flattenCleanup(db, maintainBranchName)
 		return fmt.Errorf("post-flatten row counts: %w", err)
 	}
 	for table, preCount := range preCounts {
 		postCount, ok := postCounts[table]
 		if !ok {
-			flattenCleanup(db, maintainBranchName)
 			return fmt.Errorf("integrity: table %q missing after flatten", table)
 		}
 		if preCount != postCount {
-			flattenCleanup(db, maintainBranchName)
 			return fmt.Errorf("integrity: %q pre=%d post=%d", table, preCount, postCount)
 		}
 	}
 
-	// Concurrency check: verify main hasn't moved.
-	currentHead, err := flattenGetHead(db, dbName)
-	if err != nil {
-		flattenCleanup(db, maintainBranchName)
-		return fmt.Errorf("concurrency check: %w", err)
-	}
-	if currentHead != preHead {
-		flattenCleanup(db, maintainBranchName)
-		return fmt.Errorf("ABORT: main HEAD moved during flatten")
-	}
-
-	// Get compacted HEAD.
-	var compactedHead string
-	if err := db.QueryRowContext(ctx,
-		"SELECT commit_hash FROM dolt_log ORDER BY date DESC LIMIT 1",
-	).Scan(&compactedHead); err != nil {
-		flattenCleanup(db, maintainBranchName)
-		return fmt.Errorf("get compacted HEAD: %w", err)
-	}
-
-	// Switch to main and hard-reset to the compacted commit.
-	if _, err := db.ExecContext(ctx, "CALL DOLT_CHECKOUT('main')"); err != nil {
-		flattenCleanup(db, maintainBranchName)
-		return fmt.Errorf("checkout main: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_RESET('--hard', '%s')", compactedHead)); err != nil {
-		return fmt.Errorf("reset main: %w", err)
-	}
-
-	// Delete temp branch.
-	_, _ = db.ExecContext(ctx, fmt.Sprintf("CALL DOLT_BRANCH('-D', '%s')", maintainBranchName))
-
 	return nil
 }
 
-// maintainParkRigs parks all discovered rigs and returns the names of rigs that were parked.
-func maintainParkRigs(townRoot string) []string {
-	rigs, err := discoverAllRigs(townRoot)
+// maintainGCDatabase runs dolt gc via SQL on the running server.
+// Safe on a running server — no downtime needed (Tim Sehn, 2026-02-28).
+func maintainGCDatabase(config *doltserver.Config, dbName string) error {
+	db, err := maintainOpenDB(config, dbName)
 	if err != nil {
-		fmt.Printf("  %s Could not discover rigs: %v\n", style.Warning.Render("!"), err)
-		return nil
+		return err
 	}
+	defer db.Close()
 
-	var parked []string
-	for _, r := range rigs {
-		name := r.Name
-		if IsRigParked(townRoot, name) {
-			continue // already parked
-		}
-		if err := parkOneRig(name); err != nil {
-			fmt.Printf("  %s Failed to park %s: %v\n", style.Warning.Render("!"), name, err)
-		} else {
-			parked = append(parked, name)
-		}
-	}
-	return parked
-}
-
-// maintainGCDatabase runs dolt gc on a single database directory.
-func maintainGCDatabase(dataDir, dbName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), maintainGCTimeout)
 	defer cancel()
 
-	dbDir := filepath.Join(dataDir, dbName)
-	cmd := exec.CommandContext(ctx, "dolt", "gc")
-	cmd.Dir = dbDir
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	if _, err := db.ExecContext(ctx, "CALL dolt_gc()"); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("timeout after %v", maintainGCTimeout)
 		}
-		return fmt.Errorf("%s: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("dolt_gc: %w", err)
 	}
 	return nil
 }

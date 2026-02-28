@@ -79,7 +79,4 @@ func TestMaintainConstants(t *testing.T) {
 	if defaultMaintainThreshold != 100 {
 		t.Errorf("expected default threshold 100, got %d", defaultMaintainThreshold)
 	}
-	if maintainBranchName != "gt-maintain" {
-		t.Errorf("expected branch name gt-maintain, got %s", maintainBranchName)
-	}
 }
