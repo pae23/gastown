@@ -98,19 +98,29 @@ docker run -d -p 9428:9428 victoriametrics/victoria-logs
 
 ### P0 — Critical (blocking accurate attribution)
 
-**Work context injection during `gt prime`**
+**Work context injection at `gt prime`**
 
-Polecats are rig-scoped identities but work across rigs. Currently, all telemetry for a polecat session shows the *allocation* rig, not the *work* rig.
+Polecats are **generic agents** — they have no fixed rig. `GT_RIG` at session start reflects an allocation rig or is empty, which is meaningless for attributing work. The actual work context (which rig, bead, and molecule a polecat is processing) is only known at each `gt prime` invocation.
 
-Fix: inject `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_BUILD` into the session environment at `gt prime` time, and carry them in `agent.instantiate`. This unlocks correct cost attribution per rig and per bead.
+A single polecat session goes through multiple `gt prime` cycles, each on a potentially different rig and bead:
 
-New attributes on `agent.instantiate` and `agent.event`:
+```
+session start → rig="" (generic, no work yet)
+gt prime #1   → work_rig="gastown", work_bead="sg-05iq", work_mol="mol-polecat-work"
+  bd.call, mail, sling, done  ← carry work context from prime #1
+gt prime #2   → work_rig="sfgastown", work_bead="sg-g8vs", work_mol="mol-polecat-work"
+  bd.call, mail, sling, done  ← carry work context from prime #2
+```
+
+Fix: at each `gt prime`, inject `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_MOL` into the **tmux session environment** (via `SetEnvironment`), not just emit them as log attributes. This ensures all subsequent subprocesses (`bd`, mail, agent logging) inherit the current work context automatically until the next prime overwrites it.
+
+New attributes emitted on the `prime` event and carried by all events until the next prime:
 
 | Attribute | Type | Description |
 |---|---|---|
-| `work_rig` | string | rig the polecat is currently working on |
-| `work_bead` | string | bead ID being processed |
-| `work_build` | string | build/formula context |
+| `work_rig` | string | rig whose bead is on the hook |
+| `work_bead` | string | bead ID currently hooked |
+| `work_mol` | string | molecule ID if the bead is a molecule step; empty otherwise |
 
 ---
 
@@ -334,9 +344,9 @@ flowchart TD
 
 **Query example:** Retrieve all events for a single session run
 ```logsql
-_msg:* | json run.id = "uuid-1234"
+run.id:uuid-1234
 ```
-This returns the complete waterfall: agent.instantiate → prime → bd.call(s) → agent.event(s) → mail → sling → done
+This returns the complete waterfall: `agent.instantiate` → `prime` → `bd.call`(s) → `agent.event`(s) → `mail` → `sling` → `done`
 
 #### Subprocess Integration (`internal/telemetry/subprocess.go`)
 
@@ -438,7 +448,7 @@ See [OTel Data Model](otel-data-model.md) for the complete event schema, attribu
 
 | Area | Notes | Operational Impact |
 |-------|-------|-------------------|
-| **Polecat → Rig/Build context** | **Critical gap** — see [Cross-Rig Work Context Issue](#cross-rig-work-context-issue-) below | Cannot attribute cross-rig work to correct rig; inaccurate cost allocation |
+| **Generic polecat work context** | **Critical gap** — see [Generic Polecat Work Context](#generic-polecat-work-context-️) below | No work attribution on any event between two `gt prime` calls; token costs unattributable |
 | Dolt server health | Handled by pre-spawn health checks, but not exposed to telemetry | Database issues only detected at spawn time; no real-time health monitoring |
 | Refinery merge queue | Internal operation, not surfaced via telemetry | Cannot monitor merge backlog or detect bottlenecks |
 | Scheduler dispatch logs | Capacity-controlled dispatch cycles not exposed to telemetry | Cannot track dispatch efficiency, queue depth, or capacity utilization |
@@ -453,19 +463,21 @@ See [OTel Data Model](otel-data-model.md) for the complete event schema, attribu
 
 ---
 
-## Cross-Rig Work Context Issue ⚠️
+## Generic Polecat Work Context ⚠️
 
-**Critical gap**: Polecats are rig-scoped identities but their sessions are shared across all rigs. When a polecat is reused across rigs, telemetry reflects the **original allocation rig**, not the **current work rig**.
+**Critical gap**: Polecats are generic agents with no fixed rig. `agent.instantiate.rig` reflects the allocation rig (or is empty), which has no bearing on the actual work being done. Work context is only determined at each `gt prime` invocation — and changes with every new work assignment.
+
+This means all events emitted between two `gt prime` calls (`bd.call`, `mail`, `agent.event`, `sling`, `done`) have no work attribution today. You cannot answer "which bead did this `bd.call` serve?" from current telemetry.
 
 **Impact**:
-- Cannot determine which rig's work a polecat session is doing from telemetry alone
-- Token usage cannot be accurately attributed to specific rigs or builds
-- Cloud session logs don't show correct context when investigating issues
+- `agent.instantiate.rig` is the allocation rig, not the work rig — misleading for multi-rig polecats
+- Token usage (`agent.usage`) cannot be attributed to a specific bead, rig, or molecule
+- `bd.call`, `mail`, `done` events carry no indication of which work item triggered them
 
-**Proposed solution** (see [Future Evolution](#future-evolution) above):
-- Inject `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_BUILD` during `gt prime`
-- Carry current work context in `agent.instantiate` event attributes
-- Enable cloud session correlation to correct bead/build context
+**Proposed solution** (see [Roadmap P0](#p0--critical-blocking-accurate-attribution)):
+- At each `gt prime`, write `GT_WORK_RIG`, `GT_WORK_BEAD`, `GT_WORK_MOL` into the tmux session via `SetEnvironment` — all subprocesses inherit automatically
+- Emit `work_rig`, `work_bead`, `work_mol` on the `prime` event
+- All events emitted after a `prime` (until the next one) carry the current work context via the inherited env vars
 
 ---
 

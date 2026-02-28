@@ -66,7 +66,7 @@ session carry the same `run.id`.
 | `role` | string | `polecat` · `witness` · `mayor` · `refinery` · `crew` · `deacon` · `dog` · `boot` |
 | `agent_name` | string | specific name within the role (e.g. `"wyvern-Toast"`); equals role for singletons |
 | `session_id` | string | tmux pane name |
-| `rig` | string | rig name; empty for town-level agents |
+| `rig` | string | allocation rig at session creation; **empty for generic polecats**. Not the work rig — see `work_rig` on `prime` events. |
 
 ---
 
@@ -85,12 +85,14 @@ Emitted once per agent spawn. Anchors all subsequent events for that run.
 | `role` | string | Gastown role |
 | `agent_name` | string | agent name |
 | `session_id` | string | tmux pane name |
-| `rig` | string | rig name (empty = town-level) |
-| `issue_id` | string | bead ID of the work item assigned to this agent |
+| `rig` | string | allocation rig (empty for generic polecats — not the work rig) |
+| `issue_id` | string | bead ID passed at spawn via `--issue`; empty if none |
 | `git_branch` | string | git branch of the working directory at spawn time |
 | `git_commit` | string | HEAD SHA of the working directory at spawn time |
 
-**Example log record (as received by VictoriaLogs):**
+> **Note on `rig`**: for generic polecats this field is empty or reflects the allocation pool, not the rig being worked on. Use `work_rig` from subsequent `prime` events for accurate work attribution.
+
+**Example log record (generic polecat, no rig at spawn):**
 ```json
 {
   "run.id": "a3f8c21d-4b6e-4f10-9c32-e5d7a8f9b0c1",
@@ -98,11 +100,11 @@ Emitted once per agent spawn. Anchors all subsequent events for that run.
   "town_root": "/Users/pa/gt",
   "agent_type": "claudecode",
   "role": "polecat",
-  "agent_name": "wyvern-Toast",
-  "session_id": "gt-wyvern-Toast",
-  "rig": "wyvern",
-  "issue_id": "bead-abc123",
-  "git_branch": "feat/my-feature",
+  "agent_name": "Toast",
+  "session_id": "gt-Toast",
+  "rig": "",
+  "issue_id": "",
+  "git_branch": "main",
   "git_commit": "d4e5f6a7b8c9d0e1"
 }
 ```
@@ -127,12 +129,17 @@ tmux session lifecycle events.
 Emitted on each `gt prime` invocation. The rendered formula is emitted
 separately as `prime.context` (same attributes plus `formula`).
 
+For generic polecats, `gt prime` is the moment work context becomes known. The `work_*` attributes below are planned (see roadmap P0) — once implemented, they will also be persisted in the tmux session environment so all subsequent events (`bd.call`, `mail`, `sling`, `done`) carry them automatically until the next `prime`.
+
 | Attribute | Type | Description |
 |---|---|---|
 | `run.id` | string | run UUID |
 | `role` | string | Gastown role |
 | `hook_mode` | bool | true when invoked from a hook |
 | `status` | string | `"ok"` · `"error"` |
+| `work_rig` | string | ⚠️ **Planned** — rig whose bead is on the hook |
+| `work_bead` | string | ⚠️ **Planned** — bead ID currently hooked |
+| `work_mol` | string | ⚠️ **Planned** — molecule ID if the bead is a molecule step; empty otherwise |
 
 ---
 
