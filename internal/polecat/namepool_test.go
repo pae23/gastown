@@ -1,8 +1,10 @@
 package polecat
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1034,5 +1036,80 @@ func TestDeleteCustomTheme_NotFound(t *testing.T) {
 	err = DeleteCustomTheme(tmpDir, "nonexistent")
 	if err == nil {
 		t.Error("expected error when deleting nonexistent theme")
+	}
+}
+
+func TestParseThemeFile_MaxSize(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "namepool-maxsize-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	// Generate a file with MaxThemeNames+1 valid names
+	var sb strings.Builder
+	for i := 0; i <= MaxThemeNames; i++ {
+		fmt.Fprintf(&sb, "name-%06d\n", i)
+	}
+	path := filepath.Join(tmpDir, "huge.txt")
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ParseThemeFile(path)
+	if err == nil {
+		t.Errorf("expected error when theme file exceeds %d names", MaxThemeNames)
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("expected 'exceeds maximum' error, got: %v", err)
+	}
+}
+
+func TestGetNames_FallbackOnDeletedThemeFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "namepool-fallback-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	// Create a custom theme file
+	themesDir := filepath.Join(tmpDir, "settings", "themes")
+	if err := os.MkdirAll(themesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	themePath := filepath.Join(themesDir, "ephemeral.txt")
+	if err := os.WriteFile(themePath, []byte("alpha-one\nbeta-two\ngamma-three\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create pool pointing at custom theme
+	pool := NewNamePoolWithConfig(tmpDir, "testrig", "ephemeral", nil, 10)
+	pool.SetTownRoot(tmpDir)
+
+	// Verify custom theme works
+	name, err := pool.Allocate()
+	if err != nil {
+		t.Fatalf("Allocate error: %v", err)
+	}
+	if name != "alpha-one" {
+		t.Errorf("expected alpha-one, got %s", name)
+	}
+	pool.Release(name)
+
+	// Delete the theme file out from under the pool
+	if err := os.Remove(themePath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pool should silently fall back to default theme
+	pool.Reset()
+	name, err = pool.Allocate()
+	if err != nil {
+		t.Fatalf("Allocate error after fallback: %v", err)
+	}
+
+	// Should get the first name from the default theme (mad-max), which is "furiosa"
+	if name != "furiosa" {
+		t.Errorf("expected fallback to default theme (furiosa), got %s", name)
 	}
 }

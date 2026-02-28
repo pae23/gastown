@@ -23,6 +23,10 @@ const (
 
 	// DefaultTheme is the default theme for new rigs.
 	DefaultTheme = "mad-max"
+
+	// MaxThemeNames is the maximum number of names allowed in a custom theme file.
+	// Prevents accidental theme bloat from large --from-file inputs.
+	MaxThemeNames = 2000
 )
 
 // ReservedInfraAgentNames contains names reserved for infrastructure agents.
@@ -559,6 +563,9 @@ func ParseThemeFile(path string) ([]string, error) {
 		}
 		seen[name] = true
 		names = append(names, name)
+		if len(names) > MaxThemeNames {
+			return nil, fmt.Errorf("theme file %s exceeds maximum of %d names", filepath.Base(path), MaxThemeNames)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
