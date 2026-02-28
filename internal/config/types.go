@@ -978,6 +978,11 @@ type NamepoolConfig struct {
 	// MaxBeforeNumbering is when to start appending numbers.
 	// Default is 50. After this many polecats, names become name-01, name-02, etc.
 	MaxBeforeNumbering int `json:"max_before_numbering,omitempty"`
+
+	// PoolSize is the target number of persistent polecats for the rig.
+	// Used by 'gt polecat pool init' to pre-create polecats with worktrees.
+	// Default is 4 if not set.
+	PoolSize int `json:"pool_size,omitempty"`
 }
 
 // DefaultNamepoolConfig returns a NamepoolConfig with sensible defaults.
