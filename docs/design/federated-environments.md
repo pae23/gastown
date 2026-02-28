@@ -1,77 +1,78 @@
-# Federated Execution Environments
+# Federation Capabilities
 
-> Mini-spec for environment-aware molecule steps in a Gas Town federation.
+> Mini-spec for environment-aware molecule steps across a Gas Town federation.
 
 **Status**: Draft
 **Related**: [federation.md](federation.md) | [model-aware-molecules.md](model-aware-molecules.md)
 
 ---
 
-## 1. Problème et périmètre
+## 1. Problem and Scope
 
-Un step de molécule déclare aujourd'hui *quel modèle* il veut. Ce design étend ce principe à *dans quel environnement* il tourne : quels outils sont disponibles, quelle politique réseau s'applique, quels secrets sont visibles.
+A molecule step already declares *which model* it wants to run on. This design extends that principle to *which environment* it runs in: what tools are available, what network policy applies, which secrets are visible.
 
-**Ce document ne couvre pas** comment l'environnement est créé (container, VM, bare metal — c'est la responsabilité du town qui l'héberge). Il couvre uniquement :
+**This document does not cover** how an environment is created — container, VM, bare metal. That is the responsibility of the town that hosts it. This document covers only:
 
-- le modèle de données pour décrire un environnement
-- comment un town annonce ses capacités à la fédération
-- comment un step exprime ses besoins
-- comment la fédération route le step vers le bon town
+- the data model for describing an environment
+- how a town advertises its capabilities to the federation
+- how a step declares its requirements
+- how the federation routes a step to the right town
 
 ---
 
-## 2. Concept central : l'Environment Profile
+## 2. Core Concept: Environment Profile
 
-Un `EnvProfile` est une déclaration de ce qu'un town peut fournir pour exécuter un step. Il est défini par le town localement, et annoncé à ses pairs fédérés.
+An `EnvProfile` is a declaration of what a town can provide to execute a step. It is defined locally by the town and advertised to its federated peers.
 
 ```toml
-# ~/.gt/envs.toml  (déclaré par chaque town)
+# ~/.gt/envs.toml  (declared by each town)
 
 [envs.python-isolated]
-description = "Python 3.12 sans accès réseau"
+description = "Python 3.12 with no network access"
 tools       = ["git", "python3.12", "uv", "make"]
 network     = "isolated"
-secrets     = []                      # aucun secret injecté par défaut
+secrets     = []                      # nothing injected by default
 tags        = ["python", "isolated"]
 
 [envs.node-web]
-description = "Node.js avec accès npm registry"
+description = "Node.js with access to npm registry and GitHub"
 tools       = ["git", "node22", "npm", "pnpm"]
 network     = "restricted:registry.npmjs.org,github.com"
 secrets     = ["GITHUB_TOKEN"]
 tags        = ["node", "web"]
 
 [envs.secure-sandbox]
-description = "Environnement vide, réseau coupé, zéro secret"
+description = "Empty environment, no network, no secrets"
 tools       = ["git"]
 network     = "isolated"
 secrets     = []
 tags        = ["sandbox", "untrusted"]
 
 [envs.full]
-description = "Environnement standard du town (défaut)"
-tools       = []                      # liste vide = "ce qui est sur la machine"
+description = "Standard town environment (default)"
+tools       = []                      # empty = whatever is on the machine
 network     = "full"
 secrets     = ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"]
 tags        = ["default"]
 ```
 
-### Champs d'un profil
+### Profile Fields
 
-| Champ | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `description` | string | Texte libre |
-| `tools` | []string | Exécutables disponibles. Vide = pas de contrainte |
+| `description` | string | Human-readable label |
+| `tools` | []string | Available executables. Empty = no constraint |
 | `network` | string | `"isolated"` · `"full"` · `"restricted:<allowlist>"` |
-| `secrets` | []string | Noms des vars d'environnement injectées dans le step |
-| `tags` | []string | Labels libres pour le matching par capacité |
-| `resources` | table | Optionnel : cpu, memory, timeout |
+| `secrets` | []string | Names of env vars injected into the step |
+| `tags` | []string | Free-form labels used for capability matching |
+| `resources` | table | Optional: cpu, memory, timeout |
+| `federated` | bool | Whether this profile is advertised to federation peers (default: false) |
 
 ---
 
-## 3. Ce qu'un step déclare
+## 3. Step Environment Constraints
 
-Extension naturelle du schéma de step (cf. `model-aware-molecules.md`) :
+Natural extension of the step schema (see `model-aware-molecules.md`):
 
 ```toml
 [[steps]]
@@ -79,50 +80,50 @@ id    = "run-tests"
 title = "Run test suite"
 model = "auto"
 
-# Option A : nom exact d'un profil (résolu localement ou dans la fédération)
+# Option A: exact profile name (resolved locally first, then in the federation)
 env = "python-isolated"
 
-# Option B : matching par capacités (le runtime trouve un profil compatible)
+# Option B: capability-based matching (runtime finds a compatible profile)
 env_tools   = ["python3", "make"]
 env_network = "isolated"
 env_tags    = ["python"]
 ```
 
-`env` et `env_tools/env_network/env_tags` sont mutuellement exclusifs.
-Un step sans contrainte d'environnement utilise le profil `"full"` du town local — comportement identique à aujourd'hui.
+`env` and `env_tools/env_network/env_tags` are mutually exclusive.
+A step with no environment constraint uses the local town's `"full"` profile — identical to current behaviour.
 
-### Priorité de résolution
+### Resolution Priority
 
 ```
-1. env = "nom-exact" dans le town local         → exécution locale
-2. env = "nom-exact" dans un town fédéré        → délégation
-3. env_tools/env_tags : matching dans town local → exécution locale
-4. env_tools/env_tags : matching dans fédération → délégation
-5. Aucun match                                   → step bloqué, erreur
+1. env = "exact-name"  found in local town              → local execution
+2. env = "exact-name"  found in a federated town        → delegation
+3. env_tools/env_tags  matched in local town            → local execution
+4. env_tools/env_tags  matched in federated town        → delegation
+5. No match anywhere                                     → step blocked, error
 ```
 
 ---
 
-## 4. Annonce des capacités dans la fédération
+## 4. Capability Manifest in the Federation
 
-Chaque town publie un **manifeste de capacités** dans ses beads (bead de type `town-capabilities`, un par town). Ce bead est synchronisé via les remotes Dolt existants.
+Each town publishes a **capability manifest** in its beads — a single bead of type `town-capabilities`. This bead is synchronised to peers via the existing Dolt remotes.
 
 ```
 Bead: hq-capabilities
 Type: town-capabilities
 Slots:
   hop_id   = "hop://alice@example.com/main-town"
-  profiles = <JSON des noms et tags de chaque EnvProfile>
+  profiles = <JSON: name, tags, tools, network for each federated profile>
   updated  = <timestamp>
 ```
 
-Le manifeste ne contient **pas** les secrets ni les détails internes des profils — uniquement les noms, tags, tools et politique réseau. Ce qui suffit pour le routing.
+The manifest does **not** include secrets or internal profile details — only names, tags, tools, and network policy. That is sufficient for routing decisions.
 
 ```bash
-# Consulter les capacités d'un town fédéré
+# Inspect a federated town's capabilities
 gt remote capabilities hop://alice@example.com/main-town
 
-# Résultat :
+# Output:
 # Profiles:
 #   python-isolated  [python, isolated]  tools: git, python3.12, uv
 #   node-web         [node, web]         tools: git, node22, npm
@@ -130,116 +131,116 @@ gt remote capabilities hop://alice@example.com/main-town
 
 ---
 
-## 5. Routing fédéré d'un step
+## 5. Federated Step Routing
 
-Le routing se fait en deux passes, sans protocole nouveau — en s'appuyant sur le système de délégation et mail existant.
+Routing happens in two passes, with no new protocol — built on the existing delegation and mail systems.
 
-### Passe 1 : résolution locale
+### Pass 1: Local Resolution
 
-Au moment de `gt mol execute` (ou du dispatch d'un step par le refinery), le router :
+At `gt mol execute` time (or when the refinery dispatches a step), the router:
 
-1. Charge les `EnvProfile` locaux depuis `~/.gt/envs.toml`
-2. Vérifie si le step peut s'exécuter localement
-3. Si oui → exécution locale normale (agent tmux existant)
+1. Loads `EnvProfile` entries from `~/.gt/envs.toml`
+2. Checks whether the step can run locally
+3. If yes → normal local execution (existing tmux agent)
 
-### Passe 2 : délégation fédérée
+### Pass 2: Federation Delegation
 
-Si aucun profil local ne satisfait les contraintes :
+If no local profile satisfies the constraints:
 
-1. Query des manifestes des towns fédérés connus (`gt remote list`)
-2. Sélection du town le plus adapté (matching tags + tools + network ; tiebreak : latence, charge déclarée)
-3. Création d'un bead de délégation sur le town distant via le mécanisme `AddDelegation` existant
-4. Envoi d'un message mail au mayor du town distant avec le step à exécuter
-5. Le town distant instancie le step dans ses propres beads, l'exécute, et notifie à la complétion
-6. Le town local reçoit la notification, marque le step comme complété dans la molécule
+1. Query the capability manifests of known federation peers (`gt remote list`)
+2. Select the best-matching town (tags + tools + network; tiebreak: declared load, latency)
+3. Create a delegation bead on the remote town via the existing `AddDelegation` mechanism
+4. Send a mail message to the remote town's mayor with the step to execute
+5. The remote town instantiates the step in its own beads, runs it, and notifies on completion
+6. The local town receives the notification and marks the step as done in the molecule
 
 ```
-Town local                          Town distant
+Local town                          Remote town
     │                                    │
-    │── mail: "exécute step X" ─────────▶│
-    │                                    │── crée bead step
+    │── mail: "execute step X" ─────────▶│
+    │                                    │── create step bead
     │                                    │── spawn agent
-    │                                    │── step s'exécute
-    │                                    │── step complété
-    │◀─ mail: "step X complété" ─────────│
+    │                                    │── step executes
+    │                                    │── step completes
+    │◀─ mail: "step X done" ─────────────│
     │                                    │
-    │── step marqué done dans molécule   │
+    │── step marked done in molecule     │
 ```
 
-Le step délégué apparaît dans la molécule locale comme n'importe quel autre step — il a juste un attribut `delegated_to` pointant vers le HOP URI du town distant.
+The delegated step appears in the local molecule like any other step — it simply carries a `delegated_to` attribute pointing to the remote town's HOP URI.
 
 ---
 
-## 6. Modèle de sécurité
+## 6. Security Model
 
-**Principe** : le town distant est souverain sur son environnement. Le town local ne peut pas inspecter, modifier, ni contourner les contraintes du profil distant.
+**Principle**: the remote town is sovereign over its environment. The local town cannot inspect, modify, or bypass the constraints of a remote profile.
 
-| Propriété | Garantie |
+| Property | Guarantee |
 |---|---|
-| **Isolation réseau** | Enforced par le town distant (pas de promesse sur parole) |
-| **Secrets** | Jamais transmis par la fédération. Pre-provisionnés sur le town distant |
-| **Outillage** | Le town distant certifie son manifeste ; le town local lui fait confiance |
-| **Contenu du step** | Le step (description, instructions) est transmis. Les credentials non |
-| **Résultats** | Retournés via Dolt sync + mail. Pas de canal direct |
+| **Network isolation** | Enforced by the remote town; not a matter of trust |
+| **Secrets** | Never transmitted over federation. Pre-provisioned on the remote town |
+| **Tooling** | The remote town certifies its manifest; the local town trusts it |
+| **Step content** | The step description and instructions are transmitted. Credentials are not |
+| **Results** | Returned via Dolt sync + mail. No direct channel |
 
-Un town choisit explicitement quels profils il expose à la fédération (champ `federated = true` sur le profil). Les profils non fédérés restent internes.
+A town explicitly chooses which profiles it exposes to the federation via the `federated` field. Profiles default to internal-only.
 
 ```toml
 [envs.secure-sandbox]
 # ...
-federated = true    # visible par les pairs fédérés
+federated = true    # visible to federation peers
 
 [envs.internal-gpu]
 # ...
-federated = false   # usage interne uniquement (défaut)
+federated = false   # internal only (default)
 ```
 
 ---
 
-## 7. Extension du modèle de données Step
+## 7. Step Schema Extension
 
-Ajout au schéma `Step` existant (cf. `internal/formula/types.go`) :
+Addition to the existing `Step` struct (see `internal/formula/types.go`):
 
 ```go
 // Execution environment constraints (all optional).
-// Env is a named profile: resolved locally first, then in the federation.
+// Env is a named profile: resolved locally first, then across the federation.
 Env        string   `toml:"env"`
-// EnvTools requires specific executables to be available.
+// EnvTools requires specific executables to be present in the environment.
 EnvTools   []string `toml:"env_tools"`
 // EnvNetwork requires a specific network policy.
 // Values: "isolated", "full", "restricted:<host1>,<host2>"
 EnvNetwork string   `toml:"env_network"`
-// EnvTags requires an environment with all listed tags.
+// EnvTags requires an environment that carries all listed tags.
 EnvTags    []string `toml:"env_tags"`
 ```
 
-`Env` et `EnvTools/EnvNetwork/EnvTags` sont mutuellement exclusifs (validation au parse).
+`Env` and `EnvTools/EnvNetwork/EnvTags` are mutually exclusive (parser error if both are set).
 
 ---
 
-## 8. Exemple de molécule multi-town
+## 8. Multi-Town Molecule Example
 
 ```toml
 formula = "mol-secure-pipeline"
 version = 1
 
-# Step 1 : analyse du code — peut tourner n'importe où
+# Step 1: code analysis — runs anywhere
 [[steps]]
 id    = "analyze"
 title = "Analyze codebase"
 model = "claude-sonnet-4-5"
 
-# Step 2 : exécution de tests dans un sandbox isolé
-# → sera délégué au town "forge" si indisponible localement
+# Step 2: tests in an isolated sandbox
+# → delegated to a remote town if unavailable locally
 [[steps]]
-id         = "test"
-title      = "Run tests in isolation"
-needs      = ["analyze"]
-env        = "python-isolated"
-model      = "auto"
-min_swe    = 50
+id      = "test"
+title   = "Run tests in isolation"
+needs   = ["analyze"]
+env     = "python-isolated"
+model   = "auto"
+min_swe = 50
 
-# Step 3 : synthèse — retour sur le town local
+# Step 3: synthesis — back on the local town
 [[steps]]
 id    = "report"
 title = "Synthesize results"
@@ -249,12 +250,12 @@ model = "claude-sonnet-4-5"
 
 ---
 
-## 9. Questions ouvertes
+## 9. Open Questions
 
 | Question | Discussion |
 |---|---|
-| **Sélection du town distant** | Sur quel critère choisir entre deux towns qui satisfont les mêmes contraintes ? Charge déclarée, latence, affinité organisationnelle (HOP entity) ? |
-| **Annulation d'un step délégué** | Si la molécule est `burn`ée en local, comment notifier le town distant d'annuler le step en cours ? |
-| **Résultats structurés** | Les résultats d'un step sont aujourd'hui dans les beads (description du bead complété). Suffit-il pour les cas cross-town, ou faut-il un slot dédié ? |
-| **Version des profils** | Un profil change (outil mis à jour) — comment invalider les matchings en cache dans les towns pairs ? |
-| **Confiance transitoire** | Town A délègue à Town B qui redélègue à Town C — doit-on permettre la délégation en chaîne, et jusqu'où ? |
+| **Remote town selection** | On what criteria to choose between two towns satisfying the same constraints? Declared load, latency, organisational affinity (HOP entity)? |
+| **Delegated step cancellation** | If a molecule is `burn`ed locally, how is the remote town notified to cancel an in-progress step? |
+| **Structured results** | Step results currently live in beads (completed bead description). Is that sufficient for cross-town cases, or is a dedicated slot needed? |
+| **Profile versioning** | When a profile changes (tool updated), how are cached manifests in peer towns invalidated? |
+| **Transitive delegation** | Town A delegates to Town B which delegates to Town C — should chained delegation be allowed, and to what depth? |
