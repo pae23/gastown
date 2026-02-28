@@ -929,9 +929,13 @@ notifyWitness:
 		}
 
 		// Sync worktree to main so the polecat is ready for new assignments.
+		// Phase 3 of persistent-polecat-pool: DONE→IDLE syncs to main and deletes old branch.
 		// Non-fatal: if sync fails, the polecat is still IDLE and the Witness
 		// or next gt sling can handle the branch state.
 		if cwdAvailable && !pushFailed {
+			// Remember the old branch so we can delete it after switching
+			oldBranch := branch
+
 			fmt.Printf("%s Syncing worktree to %s...\n", style.Bold.Render("→"), defaultBranch)
 			if err := g.Checkout(defaultBranch); err != nil {
 				style.PrintWarning("could not checkout %s: %v (worktree stays on feature branch)", defaultBranch, err)
@@ -939,6 +943,16 @@ notifyWitness:
 				style.PrintWarning("could not pull %s: %v (worktree on %s but may be stale)", defaultBranch, defaultBranch, err)
 			} else {
 				fmt.Printf("%s Worktree synced to %s\n", style.Bold.Render("✓"), defaultBranch)
+			}
+
+			// Delete the old polecat branch (non-fatal: cleanup only).
+			// This prevents stale branch accumulation from persistent polecats.
+			if oldBranch != "" && oldBranch != defaultBranch && oldBranch != "master" {
+				if err := g.DeleteBranch(oldBranch, true); err != nil {
+					style.PrintWarning("could not delete old branch %s: %v", oldBranch, err)
+				} else {
+					fmt.Printf("%s Deleted old branch %s\n", style.Bold.Render("✓"), oldBranch)
+				}
 			}
 		}
 
