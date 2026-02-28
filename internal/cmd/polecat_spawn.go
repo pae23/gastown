@@ -27,7 +27,8 @@ type SpawnedPolecatInfo struct {
 	ClonePath   string // Path to polecat's git worktree
 	SessionName string // Tmux session name (e.g., "gt-gastown-p-Toast")
 	Pane        string // Tmux pane ID (empty until StartSession is called)
-	BaseBranch string // Effective base branch (e.g., "main", "integration/epic-id")
+	BaseBranch  string // Effective base branch (e.g., "main", "integration/epic-id")
+	Branch      string // Git branch name (for cleanup on rollback)
 
 	// Internal fields for deferred session start
 	account string
@@ -174,6 +175,7 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 				SessionName: sessionName,
 				Pane:        "",
 				BaseBranch:  effectiveBranch,
+				Branch:      polecatObj.Branch,
 				account:     opts.Account,
 				agent:       opts.Agent,
 			}, nil
@@ -295,7 +297,8 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 		ClonePath:   polecatObj.ClonePath,
 		SessionName: sessionName,
 		Pane:        "", // Empty until StartSession is called
-		BaseBranch: effectiveBranch,
+		BaseBranch:  effectiveBranch,
+		Branch:      polecatObj.Branch,
 		account:     opts.Account,
 		agent:       opts.Agent,
 	}, nil
