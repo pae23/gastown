@@ -12,8 +12,10 @@ import (
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
-// Constants for idle dog reaping.
-const (
+// Dog lifecycle defaults — centralized for visibility and future config override.
+// These are policy decisions that may eventually move to DaemonPatrolConfig
+// or role health config. See: gt-yzt0
+var (
 	// dogIdleSessionTimeout is how long a dog can be idle with a live tmux
 	// session before the session is killed.
 	dogIdleSessionTimeout = 1 * time.Hour

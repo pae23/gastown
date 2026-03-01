@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,13 +316,31 @@ func (m *DoltServerManager) isRunning() (int, bool) {
 		return 0, false
 	}
 
+	// Verify it's actually our dolt server by checking port connectivity.
+	// More reliable than ps string matching (ZFC fix: gt-utuk).
+	if !m.isDoltServerOnPort() {
+		_ = os.Remove(m.pidFile())
+		return 0, false
+	}
+
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return 0, false
 	}
-
 	m.process = process
 	return pid, true
+}
+
+// isDoltServerOnPort checks if the configured dolt port is accepting connections.
+// More reliable than ps string matching for process identity verification.
+func (m *DoltServerManager) isDoltServerOnPort() bool {
+	addr := net.JoinHostPort(m.config.Host, strconv.Itoa(m.config.Port))
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // EnsureRunning ensures the Dolt server is running.
