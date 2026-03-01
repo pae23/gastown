@@ -4,6 +4,7 @@
 
 **Status**: Draft
 **Related**: [federation.md](federation.md) | [model-aware-molecules.md](model-aware-molecules.md) | [agent-provider-interface.md](agent-provider-interface.md)
+**Implementation**: `internal/wasteland/` · `internal/doltserver/wl_commons.go` · `internal/cmd/wl_*.go`
 
 ---
 
@@ -11,12 +12,12 @@
 
 A molecule step already declares *which model* it wants to run on. This design extends that principle to *which environment* it runs in: what tools are available, what network policy applies, which secrets are visible.
 
-**This document does not cover** how an environment is created — container, VM, bare metal. That is the responsibility of the town that hosts it. This document covers only:
+**This document does not cover** how an environment is created — container, VM, bare metal. That is the responsibility of the rig that hosts it. This document covers only:
 
-- the data model for describing an environment
-- how a town advertises its capabilities to the federation
+- the data model for describing an environment (`EnvProfile`)
+- how a rig advertises its capabilities to the **Wasteland** (`internal/wasteland/`)
 - how a step declares its requirements
-- how the federation routes a step to the right town
+- how the Wasteland routes a step to the right rig via `wl post / claim / done`
 
 ---
 
@@ -118,45 +119,67 @@ The model constraint (`model`, `min_swe`, etc.) implicitly drives agent selectio
 
 ---
 
-## 4. Capability Manifest in the Federation
+## 4. Capability Manifest in the Wasteland
 
-Each town publishes a **capability manifest** in its beads — a single bead of type `town-capabilities`. This bead is synchronised to peers via the existing Dolt remotes.
+The Wasteland (`internal/wasteland/`) is the existing Gas Town federation: each rig holds a sovereign fork of the shared **`wl-commons`** DoltHub database, synchronised via fork/PR/merge.
 
+Rig registration already writes a row to `wl-commons.rigs`:
+
+```sql
+-- existing columns
+handle, display_name, dolthub_org, hop_uri, owner_email, gt_version,
+trust_level, registered_at, last_seen, rig_type, parent_rig
 ```
-Bead: hq-capabilities
-Type: town-capabilities
-Slots:
-  hop_id   = "hop://alice@example.com/main-town"
-  profiles = <JSON: name, tags, tools, network, agent, agent_caps for each federated profile>
-  updated  = <timestamp>
+
+The capability manifest extends this row with an `env_profiles` JSON column. Each entry is a federated `EnvProfile` (profiles with `federated = false` are excluded):
+
+```json
+{
+  "env_profiles": [
+    {
+      "name": "python-isolated",
+      "tags": ["python", "isolated"],
+      "tools": ["git", "python3.12", "uv"],
+      "network": "isolated",
+      "agent": "claude",
+      "agent_caps": ["non_interactive", "hooks", "resume"]
+    },
+    {
+      "name": "secure-sandbox",
+      "tags": ["sandbox"],
+      "tools": ["git"],
+      "network": "isolated",
+      "agent": "gemini",
+      "agent_caps": ["non_interactive", "resume"]
+    }
+  ]
+}
 ```
 
-The manifest does **not** include secrets or internal profile details — only names, tags, tools, network policy, and agent capabilities. Secrets are never transmitted.
-
-`agent_caps` is a subset of the capability matrix from [agent-provider-interface.md](agent-provider-interface.md), summarised as tier flags:
+`agent_caps` is the agent's capability tier flags (see [agent-provider-interface.md](agent-provider-interface.md)):
 
 | Flag | Meaning |
 |---|---|
-| `non_interactive` | Agent supports headless execution (`-p` flag or `exec` subcommand) |
+| `non_interactive` | Agent supports headless execution (`-p` or `exec` subcommand) |
 | `hooks` | Agent supports lifecycle hooks (session_start, tool guards) |
 | `resume` | Agent supports `--resume` / session continuation |
 
+Secrets are never advertised. The manifest is updated by `gt wl sync` whenever `~/.gt/envs.toml` changes.
+
 ```bash
-# Inspect a federated town's capabilities
-gt remote capabilities hop://alice@example.com/main-town
+# Inspect a Wasteland peer's capabilities
+gt wl caps <rig-handle>
 
 # Output:
-# Profiles:
-#   python-isolated  [python, isolated]  agent: claude  caps: non_interactive,hooks,resume  tools: git, python3.12, uv
-#   node-web         [node, web]         agent: claude  caps: non_interactive,hooks,resume  tools: git, node22, npm
-#   secure-sandbox   [sandbox]           agent: gemini  caps: non_interactive,resume        tools: git
+#   python-isolated  [python, isolated]  agent: claude  caps: non_interactive,hooks,resume
+#   secure-sandbox   [sandbox]           agent: gemini  caps: non_interactive,resume
 ```
 
 ---
 
 ## 5. Federated Step Routing
 
-Routing happens in two passes, with no new protocol — built on the existing delegation and mail systems.
+Routing happens in two passes, with no new protocol — built entirely on the existing **Wasteland** primitives (`gt wl post / claim / done / sync`).
 
 ### Pass 1: Local Resolution
 
@@ -166,31 +189,47 @@ At `gt mol execute` time (or when the refinery dispatches a step), the router:
 2. Checks whether the step can run locally
 3. If yes → normal local execution (existing tmux agent)
 
-### Pass 2: Federation Delegation
+### Pass 2: Wasteland Delegation
 
-If no local profile satisfies the constraints:
+If no local profile satisfies the constraints, the step is distributed as a **wanted item** on the `wl-commons` board:
 
-1. Query the capability manifests of known federation peers (`gt remote list`)
-2. Select the best-matching town (tags + tools + network; tiebreak: declared load, latency)
-3. Create a delegation bead on the remote town via the existing `AddDelegation` mechanism
-4. Send a mail message to the remote town's mayor with the step to execute
-5. The remote town instantiates the step in its own beads, runs it, and notifies on completion
-6. The local town receives the notification and marks the step as done in the molecule
+1. Query `wl-commons.rigs` for peers whose `env_profiles` satisfy the step's constraints (tags + tools + network + agent)
+2. Select the best-matching rig (tiebreak: `trust_level`, `last_seen`, `gt_version`)
+3. Post a wanted item with `sandbox_required = 1` and the step payload in `sandbox_scope`:
 
-```
-Local town                          Remote town
-    │                                    │
-    │── mail: "execute step X" ─────────▶│
-    │                                    │── create step bead
-    │                                    │── spawn agent
-    │                                    │── step executes
-    │                                    │── step completes
-    │◀─ mail: "step X done" ─────────────│
-    │                                    │
-    │── step marked done in molecule     │
+```sql
+-- wanted row for a delegated molecule step
+id              = "w-<hash>"
+title           = "mol: <formula-id>/<step-id>"
+type            = "mol-step"
+posted_by       = "<local-rig-handle>"
+sandbox_required = 1
+sandbox_scope   = '{"env":"python-isolated","mol_id":"...","step_id":"..."}'
+sandbox_min_tier = "isolated"
+status          = "open"
 ```
 
-The delegated step appears in the local molecule like any other step — it simply carries a `delegated_to` attribute pointing to the remote town's HOP URI.
+4. The target rig runs `gt wl sync` and sees the matching wanted item (`claimed_by` is empty, `sandbox_scope.env` matches a local profile)
+5. Target rig runs `gt wl claim w-<hash>` → status: `claimed`
+6. Target rig executes the step in the declared environment (see §6)
+7. On completion, target rig runs `gt wl done w-<hash> --evidence <bead-uri-or-commit>` → status: `in_review`
+8. Local rig syncs (`gt wl sync`) and sees `in_review`; marks the molecule step done
+
+```
+Local rig                          wl-commons                  Target rig
+    │                                   │                           │
+    │── gt wl post (sandbox_required) ─▶│                           │
+    │                                   │◀── gt wl sync ────────────│
+    │                                   │── claim ─────────────────▶│
+    │                                   │                           │── execute in env
+    │                                   │                           │── gt wl done
+    │◀── gt wl sync ────────────────────│                           │
+    │── step marked done in molecule    │                           │
+```
+
+The delegated step appears in the local molecule like any other step — it carries a `delegated_to` attribute with the target rig's `hop_uri` from the `rigs` table, and an `evidence_url` pointing to the result bead or commit on the remote rig.
+
+> **Phase 1 note**: In the current wild-west mode, `gt wl post` writes directly to the local clone of `wl-commons`. Full cross-rig visibility requires `gt wl sync` (DoltHub pull) on both sides. PR-mode delegation (Phase 2) will make this atomic.
 
 ---
 
@@ -323,11 +362,13 @@ model = "claude-sonnet-4-5"
 
 | Question | Discussion |
 |---|---|
-| **Remote town selection** | On what criteria to choose between two towns satisfying the same constraints? Declared load, latency, organisational affinity (HOP entity)? |
-| **Delegated step cancellation** | If a molecule is `burn`ed locally, how is the remote town notified to cancel an in-progress step? |
-| **Structured results** | Step results currently live in beads (completed bead description). Is that sufficient for cross-town cases, or is a dedicated slot needed? |
-| **Profile versioning** | When a profile changes (tool updated), how are cached manifests in peer towns invalidated? |
-| **Transitive delegation** | Town A delegates to Town B which delegates to Town C — should chained delegation be allowed, and to what depth? |
-| **Agent version pinning** | Should a step be able to require a minimum agent version (e.g. `claude >= 1.2`)? How is agent version advertised in the capability manifest? |
-| **Model↔agent mismatch** | If a step declares `model = "claude-opus-4-6"` but the remote town's profile has `agent = "gemini"`, the router should reject the delegation. Where is this cross-validation performed — at dispatch time or at manifest query time? |
-| **Hook portability** | Claude hooks (`settings.json`) and OpenCode hooks (plugin JS) are agent-specific. If a step relies on a `session_start` hook for context injection, does that constraint propagate to the federation? |
+| **Rig selection tiebreaking** | When multiple rigs satisfy the same constraints, on what criteria to pick one? `trust_level` and `last_seen` already exist in `wl-commons.rigs`. Should rigs self-report load or queue depth? |
+| **Directed vs open wanted** | Current Wasteland wanted items are open (any rig can claim). Molecule step delegation needs directed assignment (only the matched rig should claim). Should we add a `target_rig` column to `wanted`, or use a separate `mol_steps` table? |
+| **Delegated step cancellation** | If a molecule is `burn`ed locally while a wanted item is `claimed` by a remote rig, how is the cancellation communicated? A `status = 'cancelled'` transition doesn't exist in the current schema. |
+| **Structured results** | `wl done --evidence` currently takes a free-form URL/string. For molecule steps, the result is a bead URI. Should `completions.evidence` be structured (JSON with bead-uri, model-id, token-counts)? |
+| **Profile versioning** | `env_profiles` in the `rigs` row is updated on each `gt wl sync`. Peers read stale manifests until their next sync. Is eventual consistency sufficient, or does capability routing need fresher data? |
+| **Transitive delegation** | Rig A delegates to Rig B which delegates to Rig C — should chained delegation be allowed? The `parent_completion_id` column in `completions` hints at this, but the lifecycle isn't defined. |
+| **`sandbox_scope` schema** | The `wanted.sandbox_scope` column (JSON) already exists. What is the canonical schema for a molecule step payload? At minimum: `mol_id`, `step_id`, `env`, `instructions`, `result_bead_prefix`. |
+| **Agent version pinning** | Should a step be able to require a minimum agent version (e.g. `claude >= 1.2`)? `gt_version` is in `rigs` but refers to the Gas Town binary, not the agent. |
+| **Model↔agent mismatch** | If a step declares `model = "claude-opus-4-6"` but the matched rig has `agent = "gemini"`, the router should reject. Is this validated at `wl post` time or at claim time? |
+| **Hook portability** | Claude hooks (`settings.json`) and OpenCode hooks (plugin JS) are agent-specific. If a step depends on a `session_start` hook for context injection, does that constraint propagate to the capability manifest? |
