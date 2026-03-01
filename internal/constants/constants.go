@@ -160,6 +160,45 @@ func BeadsCustomTypesList() []string {
 	return []string{"agent", "role", "rig", "convoy", "slot", "queue", "event", "message", "molecule", "gate", "merge-request"}
 }
 
+// Molecule names — patrol, dog, and work formula identifiers.
+// Centralizes magic strings used across patrol, daemon, sling, and doctor packages.
+const (
+	// MolDeaconPatrol is the deacon patrol formula name.
+	MolDeaconPatrol = "mol-deacon-patrol"
+
+	// MolWitnessPatrol is the witness patrol formula name.
+	MolWitnessPatrol = "mol-witness-patrol"
+
+	// MolRefineryPatrol is the refinery patrol formula name.
+	MolRefineryPatrol = "mol-refinery-patrol"
+
+	// MolDogBackup is the dolt backup dog formula name.
+	MolDogBackup = "mol-dog-backup"
+
+	// MolDogCompactor is the compactor dog formula name.
+	MolDogCompactor = "mol-dog-compactor"
+
+	// MolDogDoctor is the doctor dog formula name.
+	MolDogDoctor = "mol-dog-doctor"
+
+	// MolDogJsonl is the JSONL git backup dog formula name.
+	MolDogJsonl = "mol-dog-jsonl"
+
+	// MolDogReaper is the wisp reaper dog formula name.
+	MolDogReaper = "mol-dog-reaper"
+
+	// MolPolecatWork is the polecat work formula name.
+	MolPolecatWork = "mol-polecat-work"
+
+	// MolConvoyFeed is the convoy feed formula name.
+	MolConvoyFeed = "mol-convoy-feed"
+)
+
+// PatrolFormulas returns the list of patrol formula names for all patrol roles.
+func PatrolFormulas() []string {
+	return []string{MolDeaconPatrol, MolWitnessPatrol, MolRefineryPatrol}
+}
+
 // Git branch names.
 const (
 	// BranchMain is the default main branch name.

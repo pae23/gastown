@@ -7,6 +7,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/steveyegge/gastown/internal/constants"
 )
 
 const (
@@ -108,7 +109,7 @@ func (d *Daemon) runCompactorDog() {
 	mode := compactorDogMode(d.patrolConfig)
 	d.logger.Printf("compactor_dog: starting compaction cycle (threshold=%d, mode=%s)", threshold, mode)
 
-	mol := d.pourDogMolecule("mol-dog-compactor", nil)
+	mol := d.pourDogMolecule(constants.MolDogCompactor, nil)
 	defer mol.close()
 
 	databases := d.compactorDatabases()

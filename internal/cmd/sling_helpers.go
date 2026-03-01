@@ -904,7 +904,7 @@ func parseBondSpawnRootIDWithStatus(bondOut []byte, formulaName, beadID, fallbac
 // strict var presence on direct bond paths.
 func ensureFormulaRequiredVars(formulaName string, vars []string) []string {
 	// Currently only mol-polecat-work has strict required vars on bond.
-	if formulaName != "mol-polecat-work" && formulaName != "polecat-work" {
+	if formulaName != constants.MolPolecatWork && formulaName != "polecat-work" {
 		return vars
 	}
 

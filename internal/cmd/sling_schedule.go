@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/scheduler/capacity"
 	"github.com/steveyegge/gastown/internal/style"
@@ -259,7 +260,7 @@ func resolveFormula(explicit string, hookRawBead bool) string {
 	if explicit != "" {
 		return explicit
 	}
-	return "mol-polecat-work"
+	return constants.MolPolecatWork
 }
 
 // areScheduled returns a set of bead IDs that have open sling contexts.
