@@ -119,13 +119,11 @@ type PatrolsConfig struct {
 	Deacon         *PatrolConfig          `json:"deacon,omitempty"`
 	Handler        *PatrolConfig          `json:"handler,omitempty"`
 	DoltServer     *DoltServerConfig      `json:"dolt_server,omitempty"`
-	DoltTestServer *DoltServerConfig      `json:"dolt_test_server,omitempty"`
 	DoltRemotes    *DoltRemotesConfig     `json:"dolt_remotes,omitempty"`
 	DoltBackup     *DoltBackupConfig      `json:"dolt_backup,omitempty"`
 	JsonlGitBackup *JsonlGitBackupConfig  `json:"jsonl_git_backup,omitempty"`
 	WispReaper     *WispReaperConfig      `json:"wisp_reaper,omitempty"`
 	DoctorDog      *DoctorDogConfig       `json:"doctor_dog,omitempty"`
-	JanitorDog     *JanitorDogConfig      `json:"janitor_dog,omitempty"`
 	CompactorDog           *CompactorDogConfig            `json:"compactor_dog,omitempty"`
 	ScheduledMaintenance   *ScheduledMaintenanceConfig    `json:"scheduled_maintenance,omitempty"`
 	RestartTracker         *RestartTrackerConfig          `json:"restart_tracker,omitempty"`
@@ -275,12 +273,6 @@ func IsPatrolEnabled(config *DaemonPatrolConfig, patrol string) bool {
 			return false
 		}
 		return config.Patrols.DoctorDog.Enabled
-	}
-	if patrol == "janitor_dog" {
-		if config == nil || config.Patrols == nil || config.Patrols.JanitorDog == nil {
-			return false
-		}
-		return config.Patrols.JanitorDog.Enabled
 	}
 	if patrol == "compactor_dog" {
 		if config == nil || config.Patrols == nil || config.Patrols.CompactorDog == nil {

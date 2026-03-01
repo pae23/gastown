@@ -334,11 +334,9 @@ func checkProcessHealth(expectedPort int) *ProcessHealth {
 			continue
 		}
 
-		// Skip expected servers (prod port + test port 3308).
+		// Skip expected servers (prod port).
 		if strings.Contains(cmdline, "--port "+expectedPortStr) ||
-			strings.Contains(cmdline, "--port="+expectedPortStr) ||
-			strings.Contains(cmdline, "--port 3308") ||
-			strings.Contains(cmdline, "--port=3308") {
+			strings.Contains(cmdline, "--port="+expectedPortStr) {
 			continue
 		}
 

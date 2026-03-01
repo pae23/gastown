@@ -52,9 +52,8 @@ type Daemon struct {
 	curator       *feed.Curator
 	convoyManager *ConvoyManager
 	beadsStores   map[string]beadsdk.Storage
-	doltServer     *DoltServerManager
-	doltTestServer *DoltServerManager
-	krcPruner      *KRCPruner
+	doltServer *DoltServerManager
+	krcPruner  *KRCPruner
 
 	// Mass death detection: track recent session deaths
 	deathsMu     sync.Mutex
@@ -181,15 +180,6 @@ func New(config *Config) (*Daemon, error) {
 		}
 	}
 
-	// Initialize Dolt TEST server manager if configured (dedicated test server, e.g., port 3308)
-	var doltTestServer *DoltServerManager
-	if patrolConfig != nil && patrolConfig.Patrols != nil && patrolConfig.Patrols.DoltTestServer != nil {
-		doltTestServer = NewDoltServerManager(config.TownRoot, patrolConfig.Patrols.DoltTestServer, logger.Printf)
-		if doltTestServer.IsEnabled() {
-			logger.Printf("Dolt TEST server management enabled (port %d)", patrolConfig.Patrols.DoltTestServer.Port)
-		}
-	}
-
 	// PATCH-006: Resolve binary paths at startup.
 	gtPath, err := exec.LookPath("gt")
 	if err != nil {
@@ -247,7 +237,6 @@ func New(config *Config) (*Daemon, error) {
 		ctx:            ctx,
 		cancel:         cancel,
 		doltServer:     doltServer,
-		doltTestServer: doltTestServer,
 		gtPath:         gtPath,
 		bdPath:         bdPath,
 		restartTracker: restartTracker,
@@ -370,19 +359,6 @@ func (d *Daemon) Run() error {
 		d.logger.Printf("Dolt health check ticker started (interval %v)", interval)
 	}
 
-	// Start dedicated Dolt TEST server health check ticker if configured.
-	// Monitors the shared test server (e.g., port 3308) so all `go test`
-	// invocations share one server instead of spawning their own.
-	var doltTestHealthTicker *time.Ticker
-	var doltTestHealthChan <-chan time.Time
-	if d.doltTestServer != nil && d.doltTestServer.IsEnabled() {
-		interval := d.doltTestServer.HealthCheckInterval()
-		doltTestHealthTicker = time.NewTicker(interval)
-		doltTestHealthChan = doltTestHealthTicker.C
-		defer doltTestHealthTicker.Stop()
-		d.logger.Printf("Dolt TEST health check ticker started (interval %v)", interval)
-	}
-
 	// Start dedicated Dolt remotes push ticker if configured.
 	// This runs at a lower frequency (default 15 min) than the heartbeat (3 min)
 	// to periodically push databases to their git remotes.
@@ -443,11 +419,6 @@ func (d *Daemon) Run() error {
 		defer doctorDogTicker.Stop()
 		d.logger.Printf("Doctor dog ticker started (interval %v)", interval)
 	}
-
-	// Janitor dog: no longer uses a dedicated ticker.
-	// Dispatched via plugin system (dolt-janitor/plugin.md) through handleDogs().
-	// See docs/design/dog-execution-model.md for rationale.
-	var janitorDogChan <-chan time.Time // nil channel — never fires
 
 	// Start compactor dog ticker if configured.
 	// Flattens Dolt commit history to reclaim graph storage (daily).
@@ -513,13 +484,6 @@ func (d *Daemon) Run() error {
 				d.ensureDoltServerRunning()
 			}
 
-		case <-doltTestHealthChan:
-			// Dedicated Dolt TEST server health check — keeps the shared
-			// test server alive so agents don't spawn per-test zombies.
-			if !d.isShutdownInProgress() {
-				d.ensureDoltTestServerRunning()
-			}
-
 		case <-doltRemotesChan:
 			// Periodic Dolt remote push — pushes databases to their configured
 			// git remotes on a 15-minute cadence (independent of heartbeat).
@@ -553,12 +517,6 @@ func (d *Daemon) Run() error {
 			// gc, zombie detection, backup staleness, and disk usage checks.
 			if !d.isShutdownInProgress() {
 				d.runDoctorDog()
-			}
-
-		case <-janitorDogChan:
-			// Janitor dog — pours molecule for test server orphan cleanup.
-			if !d.isShutdownInProgress() {
-				d.runJanitorDog()
 			}
 
 		case <-compactorDogChan:
@@ -612,9 +570,6 @@ func (d *Daemon) heartbeat(state *State) {
 	// 0. Ensure Dolt server is running (if configured)
 	// This must happen before beads operations that depend on Dolt.
 	d.ensureDoltServerRunning()
-
-	// 0b. Ensure Dolt TEST server is running (if configured)
-	d.ensureDoltTestServerRunning()
 
 	// 1. Ensure Deacon is running (restart if dead)
 	// Check patrol config - can be disabled in mayor/daemon.json
@@ -766,17 +721,6 @@ func (d *Daemon) pourDoctorMolecule(warnings []string) {
 	mol.closeStep("report")
 }
 
-// ensureDoltTestServerRunning ensures the dedicated test Dolt server is running.
-// This provides a shared server for all `go test` invocations, eliminating
-// per-test zombie servers (Clown Show root cause).
-func (d *Daemon) ensureDoltTestServerRunning() {
-	if d.doltTestServer == nil || !d.doltTestServer.IsEnabled() {
-		return
-	}
-	if err := d.doltTestServer.EnsureRunning(); err != nil {
-		d.logger.Printf("Error ensuring test Dolt server: %v", err)
-	}
-}
 
 // checkAllRigsDolt verifies all rigs are using the Dolt backend.
 func (d *Daemon) checkAllRigsDolt() error {
@@ -1417,15 +1361,6 @@ func (d *Daemon) shutdown(state *State) error { //nolint:unparam // error return
 
 	// Push Dolt remotes before stopping the server (if patrol is enabled)
 	d.pushDoltRemotes()
-
-	// Stop Dolt test server if we're managing it
-	if d.doltTestServer != nil && d.doltTestServer.IsEnabled() && !d.doltTestServer.IsExternal() {
-		if err := d.doltTestServer.Stop(); err != nil {
-			d.logger.Printf("Warning: failed to stop Dolt test server: %v", err)
-		} else {
-			d.logger.Println("Dolt test server stopped")
-		}
-	}
 
 	// Stop Dolt server if we're managing it
 	if d.doltServer != nil && d.doltServer.IsEnabled() && !d.doltServer.IsExternal() {

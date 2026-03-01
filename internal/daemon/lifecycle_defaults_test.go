@@ -44,10 +44,6 @@ func TestDefaultLifecycleConfig(t *testing.T) {
 		t.Error("expected doctor_dog to be enabled")
 	}
 
-	if p.JanitorDog == nil || !p.JanitorDog.Enabled {
-		t.Error("expected janitor_dog to be enabled")
-	}
-
 	if p.JsonlGitBackup == nil || !p.JsonlGitBackup.Enabled {
 		t.Error("expected jsonl_git_backup to be enabled")
 	}
@@ -141,7 +137,6 @@ func TestEnsureLifecycleDefaults_FullyConfigured(t *testing.T) {
 			WispReaper:   &WispReaperConfig{Enabled: false},
 			CompactorDog: &CompactorDogConfig{Enabled: false},
 			DoctorDog:    &DoctorDogConfig{Enabled: false},
-			JanitorDog:   &JanitorDogConfig{Enabled: false},
 			JsonlGitBackup:       &JsonlGitBackupConfig{Enabled: false},
 			DoltBackup:           &DoltBackupConfig{Enabled: false},
 			ScheduledMaintenance: &ScheduledMaintenanceConfig{Enabled: false, Threshold: &threshold},
@@ -256,7 +251,7 @@ func TestEnsureLifecycleConfigFile_ProductionScenario(t *testing.T) {
 	// Simulates the actual production daemon.json: has core patrols (deacon,
 	// refinery, witness) and explicitly disabled dolt_backup, but is missing
 	// all data maintenance tickers (wisp_reaper, compactor_dog, doctor_dog,
-	// jsonl_git_backup, scheduled_maintenance, janitor_dog).
+	// jsonl_git_backup, scheduled_maintenance).
 	tmpDir := t.TempDir()
 	mayorDir := filepath.Join(tmpDir, "mayor")
 	if err := os.MkdirAll(mayorDir, 0755); err != nil {
@@ -317,9 +312,6 @@ func TestEnsureLifecycleConfigFile_ProductionScenario(t *testing.T) {
 	}
 	if config.Patrols.DoctorDog == nil || !config.Patrols.DoctorDog.Enabled {
 		t.Error("expected doctor_dog to be auto-populated and enabled")
-	}
-	if config.Patrols.JanitorDog == nil || !config.Patrols.JanitorDog.Enabled {
-		t.Error("expected janitor_dog to be auto-populated and enabled")
 	}
 	if config.Patrols.JsonlGitBackup == nil || !config.Patrols.JsonlGitBackup.Enabled {
 		t.Error("expected jsonl_git_backup to be auto-populated and enabled")

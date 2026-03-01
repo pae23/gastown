@@ -257,7 +257,7 @@ func TestDoctorDogRespondGeneratesRecommendations(t *testing.T) {
 		Port:         3307,
 		TCPReachable: false,                                           // triggers restart_server
 		Latency:      &DoctorDogLatencyReport{DurationMs: 10000},      // triggers escalate_latency
-		Databases:    &DoctorDogDatabasesReport{Count: 30},            // triggers run_janitor
+		Databases:    &DoctorDogDatabasesReport{Count: 30},            // triggers run_cleanup
 		BackupAge:    &DoctorDogBackupReport{AgeSeconds: 7200},        // triggers sync_backup
 	}
 
@@ -286,10 +286,10 @@ func TestDoctorDogRespondGeneratesRecommendations(t *testing.T) {
 		t.Errorf("escalate_latency severity: expected high, got %s", r.Severity)
 	}
 
-	if r, ok := actions["run_janitor"]; !ok {
-		t.Error("expected run_janitor recommendation")
+	if r, ok := actions["run_cleanup"]; !ok {
+		t.Error("expected run_cleanup recommendation")
 	} else if r.Severity != "warning" {
-		t.Errorf("run_janitor severity: expected warning, got %s", r.Severity)
+		t.Errorf("run_cleanup severity: expected warning, got %s", r.Severity)
 	}
 
 	if r, ok := actions["sync_backup"]; !ok {
@@ -435,8 +435,8 @@ func TestDoctorDogRespondWithCustomThresholds(t *testing.T) {
 	if !actions["escalate_latency"] {
 		t.Error("expected escalate_latency recommendation")
 	}
-	if !actions["run_janitor"] {
-		t.Error("expected run_janitor recommendation")
+	if !actions["run_cleanup"] {
+		t.Error("expected run_cleanup recommendation")
 	}
 	if !actions["sync_backup"] {
 		t.Error("expected sync_backup recommendation")

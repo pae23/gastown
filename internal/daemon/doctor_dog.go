@@ -100,7 +100,7 @@ type DoctorDogReport struct {
 // The daemon reports what it observed; agents decide what to do.
 type DoctorDogRecommendation struct {
 	// Action is the suggested action (e.g., "restart_server", "escalate_latency",
-	// "run_janitor", "sync_backup").
+	// "run_cleanup", "sync_backup").
 	Action string `json:"action"`
 
 	// Reason explains why this recommendation was generated.
@@ -197,9 +197,6 @@ func (d *Daemon) runDoctorDog() {
 
 	// 4. Zombie server detection
 	expectedPorts := []int{port}
-	if d.doltTestServer != nil && d.doltTestServer.IsEnabled() {
-		expectedPorts = append(expectedPorts, d.doltTestServer.config.Port)
-	}
 	report.Zombies = d.doctorDogZombieReport(expectedPorts)
 
 	// 5. Backup staleness (Dolt filesystem)
@@ -528,11 +525,11 @@ func (d *Daemon) doctorDogRespond(report *DoctorDogReport) {
 
 	// Recommendation 3: Orphan database accumulation
 	if report.Databases != nil && report.Databases.Error == "" && report.Databases.Count > orphanThreshold {
-		d.logger.Printf("doctor_dog: RECOMMEND: %d databases (> %d threshold), recommend janitor",
+		d.logger.Printf("doctor_dog: RECOMMEND: %d databases (> %d threshold), recommend cleanup",
 			report.Databases.Count, orphanThreshold)
 		recs = append(recs, DoctorDogRecommendation{
-			Action:   "run_janitor",
-			Reason:   fmt.Sprintf("%d databases exceeds %d threshold", report.Databases.Count, orphanThreshold),
+			Action:   "run_cleanup",
+			Reason:   fmt.Sprintf("%d databases exceeds %d threshold — run gt dolt cleanup", report.Databases.Count, orphanThreshold),
 			Severity: "warning",
 		})
 	}

@@ -415,7 +415,6 @@ Prevention is layered:
 - **Compactor Dog**: flattens old commits to compress history, runs gc after
 - **Doctor Dog**: kills zombie servers, detects orphan DBs, monitors health
 - **JSONL Dog**: scrubs exports, rejects pollution, spike-detects before commit
-- **Janitor Dog**: cleans test server (port 3308)
 
 All Dogs are enabled by default via `EnsureLifecycleDefaults()` in
 lifecycle_defaults.go. The daemon auto-populates missing patrol entries
