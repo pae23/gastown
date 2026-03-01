@@ -278,6 +278,66 @@ func TestComputeWaves_ExcludesNonSlingable(t *testing.T) {
 	}
 }
 
+// #2141: decision beads block downstream tasks even though decisions aren't slingable.
+// A task blocked by an open decision must NOT appear in Wave 1.
+func TestComputeWaves_DecisionBlocksTask(t *testing.T) {
+	dag := &ConvoyDAG{Nodes: map[string]*ConvoyDAGNode{
+		"d1":     {ID: "d1", Type: "decision", Status: "open", Blocks: []string{"task-1"}},
+		"task-1": {ID: "task-1", Type: "task", Status: "open", BlockedBy: []string{"d1"}},
+		"task-2": {ID: "task-2", Type: "task", Status: "open"},
+	}}
+	waves, err := computeWaves(dag)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(waves) < 1 {
+		t.Fatalf("expected at least 1 wave, got %d", len(waves))
+	}
+	wave1Tasks := waves[0].Tasks
+	for _, id := range wave1Tasks {
+		if id == "task-1" {
+			t.Errorf("task-1 should NOT be in Wave 1 — it's blocked by decision d1")
+		}
+		if id == "d1" {
+			t.Errorf("decision d1 should NOT appear in any wave (not slingable)")
+		}
+	}
+	found := false
+	for _, id := range wave1Tasks {
+		if id == "task-2" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("task-2 should be in Wave 1, got: %v", wave1Tasks)
+	}
+	for _, w := range waves {
+		for _, id := range w.Tasks {
+			if id == "d1" {
+				t.Errorf("decision d1 should not appear in wave %d", w.Number)
+			}
+		}
+	}
+}
+
+// #2141: closed decision beads do NOT block downstream tasks.
+func TestComputeWaves_ClosedDecisionDoesNotBlock(t *testing.T) {
+	dag := &ConvoyDAG{Nodes: map[string]*ConvoyDAGNode{
+		"d1":     {ID: "d1", Type: "decision", Status: "closed", Blocks: []string{"task-1"}},
+		"task-1": {ID: "task-1", Type: "task", Status: "open", BlockedBy: []string{"d1"}},
+	}}
+	waves, err := computeWaves(dag)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(waves) != 1 {
+		t.Fatalf("expected 1 wave, got %d", len(waves))
+	}
+	if len(waves[0].Tasks) != 1 || waves[0].Tasks[0] != "task-1" {
+		t.Errorf("task-1 should be in Wave 1 (decision is closed), got: %v", waves[0].Tasks)
+	}
+}
+
 // U-13: parent-child deps don't create execution edges
 func TestComputeWaves_ParentChildNotExecution(t *testing.T) {
 	dag := &ConvoyDAG{Nodes: map[string]*ConvoyDAGNode{

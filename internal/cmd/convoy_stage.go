@@ -865,13 +865,21 @@ func isSlingableType(beadType string) bool {
 // computeWaves assigns each slingable task to an execution wave using Kahn's algorithm.
 // Wave 1 = tasks with no unsatisfied blocking deps within the staged set.
 // Wave N+1 = tasks whose blockers are ALL in wave N or earlier.
-// Epics and non-slingable types are excluded from waves.
+// Epics and non-slingable types are excluded from wave task lists but their
+// blocking edges ARE respected — a task blocked by a decision bead will not
+// appear until that decision is resolved (fixes #2141).
 // Parent-child deps do NOT create execution edges.
 // Returns error if the DAG contains no slingable tasks.
 func computeWaves(dag *ConvoyDAG) ([]Wave, error) {
-	// Step 1: Filter to slingable types only.
+	// Step 1: Identify slingable nodes (appear in wave output) vs gate nodes
+	// (decisions, epics — participate in DAG ordering but aren't dispatched).
 	slingable := make(map[string]*ConvoyDAGNode)
+	allNodes := make(map[string]*ConvoyDAGNode) // all non-closed nodes in DAG
 	for id, node := range dag.Nodes {
+		if node.Status == "closed" {
+			continue
+		}
+		allNodes[id] = node
 		if isSlingableType(node.Type) {
 			slingable[id] = node
 		}
@@ -880,13 +888,15 @@ func computeWaves(dag *ConvoyDAG) ([]Wave, error) {
 		return nil, fmt.Errorf("no slingable tasks in DAG (need task, bug, feature, or chore)")
 	}
 
-	// Step 2: Calculate in-degree for each slingable node.
-	// Only count BlockedBy entries that reference other slingable nodes.
-	inDegree := make(map[string]int, len(slingable))
-	for id, node := range slingable {
+	// Step 2: Calculate in-degree for ALL non-closed nodes.
+	// Count BlockedBy entries that reference other nodes in the DAG.
+	// This ensures decision→task edges are respected: a task blocked by an
+	// open decision gets in-degree > 0 and won't land in Wave 1.
+	inDegree := make(map[string]int, len(allNodes))
+	for id, node := range allNodes {
 		deg := 0
 		for _, blocker := range node.BlockedBy {
-			if _, ok := slingable[blocker]; ok {
+			if _, ok := allNodes[blocker]; ok {
 				deg++
 			}
 		}
@@ -898,37 +908,48 @@ func computeWaves(dag *ConvoyDAG) ([]Wave, error) {
 	processed := 0
 	waveNum := 0
 
-	for processed < len(slingable) {
+	for processed < len(allNodes) {
 		// Collect nodes with in-degree 0.
-		var ready []string
+		var readyAll []string
 		for id, deg := range inDegree {
 			if deg == 0 {
-				ready = append(ready, id)
+				readyAll = append(readyAll, id)
 			}
 		}
 
-		if len(ready) == 0 {
+		if len(readyAll) == 0 {
 			// All remaining nodes have dependencies — cycle (should be
 			// caught by detectCycles before reaching here).
-			return nil, fmt.Errorf("cycle detected among remaining %d slingable nodes", len(slingable)-processed)
+			return nil, fmt.Errorf("cycle detected among remaining %d nodes", len(allNodes)-processed)
 		}
 
-		// Step 7: Sort within each wave for determinism.
-		sort.Strings(ready)
-		waveNum++
+		// Filter to slingable tasks only for wave output.
+		var readySlingable []string
+		for _, id := range readyAll {
+			if _, ok := slingable[id]; ok {
+				readySlingable = append(readySlingable, id)
+			}
+		}
 
-		waves = append(waves, Wave{
-			Number: waveNum,
-			Tasks:  ready,
-		})
+		// Only emit a wave if there are slingable tasks in it.
+		if len(readySlingable) > 0 {
+			// Step 7: Sort within each wave for determinism.
+			sort.Strings(readySlingable)
+			waveNum++
+			waves = append(waves, Wave{
+				Number: waveNum,
+				Tasks:  readySlingable,
+			})
+		}
 
-		// Remove processed nodes and decrement in-degrees of their dependents.
-		for _, id := range ready {
+		// Remove ALL processed nodes (slingable and non-slingable) and
+		// decrement in-degrees of their dependents.
+		for _, id := range readyAll {
 			delete(inDegree, id)
 			processed++
 
-			// Decrement in-degree of nodes this one blocks (that are slingable).
-			for _, blocked := range slingable[id].Blocks {
+			// Decrement in-degree of nodes this one blocks.
+			for _, blocked := range allNodes[id].Blocks {
 				if _, ok := inDegree[blocked]; ok {
 					inDegree[blocked]--
 				}
