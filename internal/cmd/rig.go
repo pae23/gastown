@@ -527,7 +527,7 @@ func runRigAdd(cmd *cobra.Command, args []string) error {
 	// Validate upstream URL if provided
 	rigAddUpstreamURL = strings.TrimSpace(rigAddUpstreamURL)
 	if rigAddUpstreamURL != "" && !isGitRemoteURL(rigAddUpstreamURL) {
-		return fmt.Errorf("invalid upstream URL %q: expected a remote URL (https://, git@, ssh://, git://)", rigAddUpstreamURL)
+		return fmt.Errorf("invalid upstream URL %q: expected a remote URL (e.g. https://, git@host:, ssh://, s3://)", rigAddUpstreamURL)
 	}
 
 	startTime := time.Now()
@@ -916,11 +916,18 @@ func runRigAdopt(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid push URL %q: expected a remote URL (e.g. https://, git@host:, ssh://, s3://)", rigAddPushURL)
 	}
 
+	// Validate --upstream-url if provided
+	rigAddUpstreamURL = strings.TrimSpace(rigAddUpstreamURL)
+	if rigAddUpstreamURL != "" && !isGitRemoteURL(rigAddUpstreamURL) {
+		return fmt.Errorf("invalid upstream URL %q: expected a remote URL (e.g. https://, git@host:, ssh://, s3://)", rigAddUpstreamURL)
+	}
+
 	// Register the existing rig
 	result, err := mgr.RegisterRig(rig.RegisterRigOptions{
 		Name:        name,
 		GitURL:      rigAddAdoptURL,
 		PushURL:     rigAddPushURL,
+		UpstreamURL: rigAddUpstreamURL,
 		BeadsPrefix: rigAddPrefix,
 		Force:       rigAddAdoptForce,
 	})

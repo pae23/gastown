@@ -1254,6 +1254,7 @@ type RegisterRigOptions struct {
 	Name        string // Rig name (directory name)
 	GitURL      string // Override git URL (auto-detected from origin if empty)
 	PushURL     string // Override push URL (auto-detected from existing config/remotes if empty)
+	UpstreamURL string // Upstream repository URL (for fork workflows)
 	BeadsPrefix string // Beads issue prefix (defaults to derived from name or existing config)
 	Force       bool   // Register even if directory structure looks incomplete
 }
@@ -1401,11 +1402,28 @@ func (m *Manager) RegisterRig(opts RegisterRigOptions) (*RegisterRigResult, erro
 		}
 	}
 
+	// Configure upstream remote if provided (for fork workflows)
+	if opts.UpstreamURL != "" {
+		if _, err := os.Stat(bareRepoPath); err == nil {
+			bareGit := git.NewGitWithDir(bareRepoPath, "")
+			if upErr := bareGit.AddUpstreamRemote(opts.UpstreamURL); upErr != nil {
+				return nil, fmt.Errorf("configuring upstream remote on bare repo: %w", upErr)
+			}
+		}
+		if _, err := os.Stat(mayorRigPath); err == nil {
+			mayorGit := git.NewGit(mayorRigPath)
+			if upErr := mayorGit.AddUpstreamRemote(opts.UpstreamURL); upErr != nil {
+				return nil, fmt.Errorf("configuring mayor upstream remote: %w", upErr)
+			}
+		}
+	}
+
 	// Register in town config
 	m.config.Rigs[opts.Name] = config.RigEntry{
-		GitURL:  result.GitURL,
-		PushURL: pushURL,
-		AddedAt: time.Now(),
+		GitURL:      result.GitURL,
+		PushURL:     pushURL,
+		UpstreamURL: opts.UpstreamURL,
+		AddedAt:     time.Now(),
 		BeadsConfig: &config.BeadsConfig{
 			Prefix: result.BeadsPrefix,
 		},
