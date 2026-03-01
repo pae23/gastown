@@ -182,7 +182,8 @@ The operational plane lives entirely in the local Dolt server. The ledger
 plane is currently served by the JSONL Dog, which exports scrubbed snapshots
 to a git-backed archive every 15 minutes — this is the durable record that
 survives disasters (proven in Clown Show #13). The design plane will
-federate via DoltHub as part of the Wasteland commons (in progress).
+federate via DoltHub as part of the Wasteland commons (planned, not yet
+in active development).
 
 ## Data Lifecycle: Think Git, Not SQL (CRITICAL)
 
@@ -228,8 +229,11 @@ CREATE → LIVE → CLOSE → DECAY → COMPACT → FLATTEN
 | COMPACT | Compactor Dog | Daily | `DOLT_RESET --soft` + `DOLT_COMMIT` (safe on running server) |
 | FLATTEN | Compactor Dog | Daily | Same as COMPACT — no downtime, no maintenance window |
 
-All six stages are implemented. DECAY runs in the Reaper Dog (wisp_reaper.go),
-COMPACT/FLATTEN run in the Compactor Dog (compactor_dog.go).
+All six stages are implemented in code. DECAY runs in the Reaper Dog
+(wisp_reaper.go), COMPACT/FLATTEN run in the Compactor Dog (compactor_dog.go).
+All lifecycle tickers are enabled by default via `EnsureLifecycleDefaults()`
+(lifecycle_defaults.go), which auto-populates daemon.json with sensible
+defaults on `gt init` or `gt up`. Explicitly disabled patrols are preserved.
 
 ### Two Data Streams
 
@@ -245,7 +249,7 @@ EPHEMERAL (wisps, patrol data)          PERMANENT (issues, molecules, agents)
 
 **Ephemeral data** (wisps, wisp_events, wisp_labels, wisp_deps) is
 high-volume patrol exhaust. Valuable in real-time, worthless after 24h.
-The Reaper Dog DELETES the rows. The Compactor Dog REBASES the commits
+The Reaper Dog DELETES the rows. The Compactor Dog flattens the commits
 that wrote them out of history. Without both, storage grows without bound.
 
 **Permanent data** (issues, molecules, agents, dependencies, labels) is
@@ -408,10 +412,16 @@ Prevention is layered:
 - **Prompting**: Agents prefer `gt nudge` over `gt mail send` (zero commits)
 - **Firewall** (store.go): refuses test-prefixed CREATE DATABASE on port 3307
 - **Reaper Dog**: DELETEs closed wisps, auto-closes stale issues
-- **Compactor Dog**: REBASEs old commits to compress history, runs gc after
+- **Compactor Dog**: flattens old commits to compress history, runs gc after
 - **Doctor Dog**: kills zombie servers, detects orphan DBs, monitors health
 - **JSONL Dog**: scrubs exports, rejects pollution, spike-detects before commit
 - **Janitor Dog**: cleans test server (port 3308)
+
+All Dogs are enabled by default via `EnsureLifecycleDefaults()` in
+lifecycle_defaults.go. The daemon auto-populates missing patrol entries
+in daemon.json on startup (`gt init` / `gt up`). To disable a specific
+Dog, set `"enabled": false` in its daemon.json section — the auto-populate
+logic preserves explicitly configured entries.
 
 ### Communication Hygiene (Reducing Commit Volume)
 
@@ -484,14 +494,14 @@ remote with local state. Subsequent pushes should work without `--force`.
 - **Server downtime**: Push requires exclusive access to the data directory,
   so the server must be stopped during push. This creates a maintenance window.
 
-### DoltHub Remotes (In Progress)
+### DoltHub Remotes (Planned)
 
 DoltHub's native protocol (`https://doltremoteapi.dolthub.com/...`) avoids
-the git-remote-cache entirely and is much faster. Julian Knutsen is
-implementing DoltHub-based federation as part of the Wasteland commons —
-this will replace git-protocol remotes for the design and ledger planes.
-Migration requires DoltHub accounts and reconfiguring remotes with
-`dolt remote set-url`.
+the git-remote-cache entirely and is much faster. DoltHub-based federation
+is planned as part of the Wasteland commons — this would replace
+git-protocol remotes for the design and ledger planes. Migration would
+require DoltHub accounts and reconfiguring remotes with
+`dolt remote set-url`. Not currently in active development.
 
 ## File Layout
 
