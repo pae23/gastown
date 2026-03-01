@@ -1557,10 +1557,10 @@ func isRunningFromPID(townRoot string) (bool, int, error) {
 	}
 
 	if !alive {
-		// Process not running, clean up stale PID file
-		if err := os.Remove(pidFile); err == nil {
-			return false, 0, fmt.Errorf("removed stale PID file (process %d not found)", pid)
-		}
+		// Process not running, clean up stale PID file.
+		// This is a successful recovery, not an error — the caller can
+		// proceed as if no daemon is running (fixes #2107).
+		os.Remove(pidFile) // best-effort cleanup
 		return false, 0, nil
 	}
 
