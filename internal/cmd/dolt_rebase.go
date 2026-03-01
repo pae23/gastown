@@ -27,6 +27,12 @@ var doltRebaseCmd = &cobra.Command{
 Unlike 'gt dolt flatten' (which destroys ALL history), surgical rebase
 keeps recent commits individual while squashing old history into one.
 
+CONCURRENT WRITE HAZARD: DOLT_REBASE is NOT safe with concurrent writes.
+If agents write to the database during rebase, Dolt detects the graph
+change and errors. The Compactor Dog retries once on such errors, but
+if surgical mode is unreliable in your environment, prefer flatten mode
+(concurrent writes are safe with DOLT_RESET --soft).
+
 Algorithm (based on Dolt's DOLT_REBASE):
   1. Creates anchor branch at root commit
   2. Creates work branch from main

@@ -298,6 +298,16 @@ Unlike flatten (which squashes everything), interactive rebase lets you
 keep recent individual commits while squashing old history. Safe on a
 running server. Based on Jason Fulghum's rebase implementation.
 
+**Concurrent write hazard** (Tim Sehn, 2026-02-28): DOLT_REBASE is NOT
+safe with concurrent writes. If agents write to the database during an
+interactive rebase, Dolt detects the commit graph change and errors. This
+is unlike flatten (DOLT_RESET --soft), where concurrent writes are safe
+because the merge base shifts but the diff is just what the transaction
+wrote. The Compactor Dog's surgical mode includes retry logic (one retry
+with 2s backoff) to handle transient concurrent write conflicts. If
+surgical mode proves unreliable under heavy write load, switch to flatten
+mode which has no concurrent write hazard.
+
 ```sql
 -- 1. Create a branch at the initial commit (the rebase "upstream")
 SET @init = (SELECT commit_hash FROM dolt_log ORDER BY date ASC LIMIT 1);
