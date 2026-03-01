@@ -359,13 +359,44 @@ func (d *Daemon) commitAndPushJsonlBackup(gitRepo string, databases []string, co
 		return fmt.Errorf("git commit: %w", err)
 	}
 
-	// Push — use longer timeout since push involves network I/O.
-	if err := d.runGitCmd(gitRepo, gitPushTimeout, "push", "origin", "main"); err != nil {
-		return fmt.Errorf("git push: %w", err)
+	// Push — only if a remote is configured. Skip gracefully if not.
+	if d.hasGitRemote(gitRepo, "origin") {
+		// Detect current branch name for push (master vs main).
+		branch := d.currentGitBranch(gitRepo)
+		if branch == "" {
+			branch = "main" // fallback
+		}
+		if err := d.runGitCmd(gitRepo, gitPushTimeout, "push", "origin", branch); err != nil {
+			return fmt.Errorf("git push: %w", err)
+		}
+		d.logger.Printf("jsonl_git_backup: committed and pushed: %s", msg)
+	} else {
+		d.logger.Printf("jsonl_git_backup: committed (no remote configured, skipping push): %s", msg)
 	}
-
-	d.logger.Printf("jsonl_git_backup: committed and pushed: %s", msg)
 	return nil
+}
+
+// hasGitRemote checks if the named remote exists in the git repo.
+func (d *Daemon) hasGitRemote(gitRepo, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), gitCmdTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "-C", gitRepo, "remote", "get-url", name)
+	return cmd.Run() == nil
+}
+
+// currentGitBranch returns the current branch name, or empty string on error.
+func (d *Daemon) currentGitBranch(gitRepo string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), gitCmdTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "-C", gitRepo, "rev-parse", "--abbrev-ref", "HEAD")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
 }
 
 // runGitCmd runs a git command in the specified directory with the given timeout.
