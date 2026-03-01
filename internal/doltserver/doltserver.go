@@ -219,6 +219,13 @@ func DefaultConfig(townRoot string) *Config {
 		config.LogLevel = ll
 	}
 
+	// Default to debug logging per Dolt team recommendation (Dustin Brown, 2026-02-24):
+	// "run the Dolt server with loglevel debug or trace until everything is stable
+	// so you can send us the server logs when you hit an issue"
+	if config.LogLevel == "" {
+		config.LogLevel = "debug"
+	}
+
 	return config
 }
 
@@ -908,19 +915,6 @@ func Start(townRoot string) error {
 				// Corrupted phantom — remove it so Dolt won't try to load it
 				fmt.Fprintf(os.Stderr, "Quarantine: removing corrupted database dir %q (missing noms/manifest)\n", entry.Name())
 				_ = os.RemoveAll(filepath.Join(config.DataDir, entry.Name()))
-			}
-		}
-	}
-
-	// Auto-remove orphaned beads_* databases from old naming convention (gt-7d4f).
-	// These are created by bd init with the beads_ prefix but never cleaned up
-	// after migration to the new <rigname> convention.
-	if orphans, findErr := FindOrphanedDatabases(townRoot); findErr == nil {
-		for _, orphan := range orphans {
-			if strings.HasPrefix(orphan.Name, "beads_") {
-				fmt.Fprintf(os.Stderr, "Cleanup: removing orphaned database %q (%s)\n",
-					orphan.Name, formatBytes(orphan.SizeBytes))
-				_ = os.RemoveAll(orphan.Path)
 			}
 		}
 	}

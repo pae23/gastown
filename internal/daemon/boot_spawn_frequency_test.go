@@ -61,7 +61,7 @@ exit 0
 // daemon should not spawn a fresh Boot session every heartbeat when triage was just run.
 func TestEnsureBootRunning_DoesNotSpawnEveryTick(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("test uses Unix shell script mock for tmux")
+		t.Skip("skipping on Windows — fake tmux requires bash")
 	}
 	townRoot := t.TempDir()
 	fakeBinDir := t.TempDir()

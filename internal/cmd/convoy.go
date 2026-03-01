@@ -284,13 +284,14 @@ Examples:
 
 var convoyStrandedCmd = &cobra.Command{
 	Use:   "stranded",
-	Short: "Find stranded convoys (ready work or empty) needing attention",
+	Short: "Find stranded convoys (ready work, stuck, or empty) needing attention",
 	Long: `Find convoys that have ready issues but no workers processing them,
-or empty convoys (0 tracked issues) that need cleanup.
+stuck convoys (tracked issues but none ready), or empty convoys that need cleanup.
 
 A convoy is "stranded" when:
 - Convoy is open AND either:
   - Has tracked issues that are ready but unassigned, OR
+  - Has tracked issues but none are ready (stuck — waiting on dependencies/workers), OR
   - Has 0 tracked issues (empty — needs auto-close via convoy check)
 
 Use this to detect convoys that need feeding or cleanup. The Deacon patrol
@@ -1159,10 +1160,11 @@ func removePolecatWorktree(wt convoyWorktreeInfo) error {
 
 // strandedConvoyInfo holds info about a stranded convoy.
 type strandedConvoyInfo struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	ReadyCount  int      `json:"ready_count"`
-	ReadyIssues []string `json:"ready_issues"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	TrackedCount int      `json:"tracked_count"`
+	ReadyCount   int      `json:"ready_count"`
+	ReadyIssues  []string `json:"ready_issues"`
 }
 
 // readyIssueInfo holds info about a ready (stranded) issue.
@@ -1197,10 +1199,12 @@ func runConvoyStranded(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%s Found %d stranded convoy(s):\n\n", style.Warning.Render("⚠"), len(stranded))
 	for _, s := range stranded {
 		fmt.Printf("  🚚 %s: %s\n", s.ID, s.Title)
-		if s.ReadyCount == 0 {
+		if s.ReadyCount == 0 && s.TrackedCount == 0 {
 			fmt.Printf("     Empty convoy (0 tracked issues) — needs cleanup\n")
+		} else if s.ReadyCount == 0 && s.TrackedCount > 0 {
+			fmt.Printf("     Stuck convoy (%d tracked issues, 0 ready)\n", s.TrackedCount)
 		} else {
-			fmt.Printf("     Ready issues: %d\n", s.ReadyCount)
+			fmt.Printf("     Ready issues: %d (of %d tracked)\n", s.ReadyCount, s.TrackedCount)
 			for _, issueID := range s.ReadyIssues {
 				fmt.Printf("       • %s\n", issueID)
 			}
@@ -1208,11 +1212,13 @@ func runConvoyStranded(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	// Separate feed advice (convoys with ready work) from cleanup advice (empty convoys).
-	var feedable, empty []strandedConvoyInfo
+	// Separate feed advice, stuck convoys, and cleanup advice.
+	var feedable, stuck, empty []strandedConvoyInfo
 	for _, s := range stranded {
 		if s.ReadyCount > 0 {
 			feedable = append(feedable, s)
+		} else if s.TrackedCount > 0 {
+			stuck = append(stuck, s)
 		} else {
 			empty = append(empty, s)
 		}
@@ -1224,8 +1230,17 @@ func runConvoyStranded(cmd *cobra.Command, args []string) error {
 			fmt.Printf("  gt sling mol-convoy-feed deacon/dogs --var convoy=%s\n", s.ID)
 		}
 	}
-	if len(empty) > 0 {
+	if len(stuck) > 0 {
 		if len(feedable) > 0 {
+			fmt.Println()
+		}
+		fmt.Println("Stuck convoys (tracked issues exist but none are ready):")
+		for _, s := range stuck {
+			fmt.Printf("  🚚 %s (%d tracked)\n", s.ID, s.TrackedCount)
+		}
+	}
+	if len(empty) > 0 {
+		if len(feedable) > 0 || len(stuck) > 0 {
 			fmt.Println()
 		}
 		fmt.Println("To close empty convoys, run:")
@@ -1276,10 +1291,11 @@ func findStrandedConvoys(townBeads string) ([]strandedConvoyInfo, error) {
 		// attention (auto-close via convoy check or manual cleanup).
 		if len(tracked) == 0 {
 			stranded = append(stranded, strandedConvoyInfo{
-				ID:          convoy.ID,
-				Title:       convoy.Title,
-				ReadyCount:  0,
-				ReadyIssues: []string{},
+				ID:           convoy.ID,
+				Title:        convoy.Title,
+				TrackedCount: 0,
+				ReadyCount:   0,
+				ReadyIssues:  []string{},
 			})
 			continue
 		}
@@ -1312,10 +1328,22 @@ func findStrandedConvoys(townBeads string) ([]strandedConvoyInfo, error) {
 
 		if len(readyIssues) > 0 {
 			stranded = append(stranded, strandedConvoyInfo{
-				ID:          convoy.ID,
-				Title:       convoy.Title,
-				ReadyCount:  len(readyIssues),
-				ReadyIssues: readyIssues,
+				ID:           convoy.ID,
+				Title:        convoy.Title,
+				TrackedCount: len(tracked),
+				ReadyCount:   len(readyIssues),
+				ReadyIssues:  readyIssues,
+			})
+		} else {
+			// Stuck convoy: has tracked issues but none are ready.
+			// Include in stranded list so callers (e.g., FeedStranded)
+			// can distinguish stuck from truly empty.
+			stranded = append(stranded, strandedConvoyInfo{
+				ID:           convoy.ID,
+				Title:        convoy.Title,
+				TrackedCount: len(tracked),
+				ReadyCount:   0,
+				ReadyIssues:  []string{},
 			})
 		}
 	}

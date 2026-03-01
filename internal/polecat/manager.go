@@ -1497,19 +1497,24 @@ func isSessionProcessDead(t *tmux.Tmux, sessionName string, townRoot string) boo
 	// Fallback: PID signal probing (legacy, for sessions without heartbeat support).
 	pidStr, err := t.GetPanePID(sessionName)
 	if err != nil {
+		// Tmux query failed — could be permission denied, server busy, etc.
+		// Don't assume dead; let a future cycle retry.
 		return false
 	}
 	if pidStr == "" {
+		// No PID means no process — session is dead.
 		return true
 	}
 	pid, err := strconv.Atoi(pidStr)
 	if err != nil {
+		// Got a non-numeric PID — shouldn't happen, but don't kill.
 		return false
 	}
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return true
 	}
+	// On Unix, Signal(0) checks if process exists without sending a signal
 	if err := p.Signal(syscall.Signal(0)); err != nil {
 		return true
 	}

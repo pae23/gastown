@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/nudge"
-	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
@@ -71,9 +70,6 @@ func runMailCheck(cmd *cobra.Command, args []string) error {
 	// at the next task boundary, normal/low is informational but still
 	// checked before going idle (prevents mail from sitting unread).
 	if mailCheckInject {
-		// Touch heartbeat file so Go-side liveness checks see recent activity
-		// (ZFC: gt-qjtq — heartbeat replaces PID signal inference).
-		touchSessionHeartbeat(workDir)
 		if unread > 0 {
 			messages, listErr := mailbox.ListUnread()
 			if listErr != nil {
@@ -175,14 +171,4 @@ func formatInjectOutput(messages []*mail.Message) string {
 	}
 
 	return b.String()
-}
-
-// touchSessionHeartbeat touches the heartbeat file for the current tmux session.
-// Best-effort: failures are silently ignored since heartbeat is advisory.
-func touchSessionHeartbeat(townRoot string) {
-	sessionName := tmux.CurrentSessionName()
-	if sessionName == "" {
-		return
-	}
-	_ = session.TouchHeartbeat(townRoot, sessionName)
 }

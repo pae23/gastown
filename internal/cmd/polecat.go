@@ -1316,27 +1316,12 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 		fmt.Printf("  %s deleted worktree\n", style.Success.Render("✓"))
 	}
 
-	// Step 3.5: Check for pending MR before touching the branch.
-	// If an open MR exists for this branch, the refinery still needs the remote
-	// branch to complete the merge. Preserve both the MR and remote branch;
-	// the refinery will delete the remote branch after a successful merge.
-	// Fixes: https://github.com/steveyegge/gastown/issues/2028
-	hasPendingMR := false
-	if branchToDelete != "" {
-		bd := beads.New(r.Path)
-		mr, findErr := bd.FindMRForBranch(branchToDelete)
-		if findErr != nil {
-			fmt.Printf("  %s MR lookup failed: %v\n", style.Dim.Render("○"), findErr)
-		} else if mr != nil {
-			hasPendingMR = true
-			fmt.Printf("  %s preserving MR %s and remote branch for refinery merge\n", style.Success.Render("✓"), mr.ID)
-		}
-	}
-
-	// Step 4: Delete branch (if we know it)
+	// Step 4: Delete local branch (if we know it)
 	// Local branch can always be deleted (worktree is already gone).
-	// Remote branch is only deleted when there is NO pending MR — otherwise
-	// the refinery would find the source branch missing and fail to merge.
+	// Remote branch is never deleted during nuke — the refinery owns
+	// remote branch cleanup after successful merge (gt mq post-merge).
+	// This prevents the race where nuke deletes the branch before the
+	// refinery has a chance to merge it. (gt-v5ku)
 	if branchToDelete != "" {
 		repoGit := getRepoGitForRig(r.Path)
 		if err := repoGit.DeleteBranch(branchToDelete, true); err != nil {
@@ -1344,41 +1329,7 @@ func nukePolecatFull(polecatName, rigName string, mgr *polecat.Manager, r *rig.R
 		} else {
 			fmt.Printf("  %s deleted local branch %s\n", style.Success.Render("✓"), branchToDelete)
 		}
-		if hasPendingMR {
-			fmt.Printf("  %s skipped remote branch delete (MR pending in merge queue)\n", style.Dim.Render("○"))
-		} else {
-			if !polecatNukeForce {
-				// Check if remote branch has unmerged commits before deleting.
-				// Without this check, work is lost when polecats push branches but
-				// don't create MR beads (e.g., due to missing formula). The refinery
-				// needs the remote branch to merge the work.
-				// Fixes: gt-rm9f (nuke-before-merge data loss on bd-1lc, bd-019)
-				hasUnmerged := false
-				remoteBranch := "origin/" + branchToDelete
-				if ahead, aheadErr := repoGit.CommitsAhead("origin/main", remoteBranch); aheadErr == nil && ahead > 0 {
-					hasUnmerged = true
-					fmt.Printf("  %s preserving remote branch %s (%d unmerged commit(s) ahead of main)\n",
-						style.Warning.Render("⚠"), branchToDelete, ahead)
-				}
-				if hasUnmerged {
-					fmt.Printf("  %s skipped remote branch delete (unmerged commits — refinery or human should merge)\n", style.Dim.Render("○"))
-				} else {
-					// No pending MR and no unmerged commits — safe to delete remote branch
-					if err := repoGit.DeleteRemoteBranch("origin", branchToDelete); err != nil {
-						fmt.Printf("  %s remote branch delete: %v\n", style.Dim.Render("○"), err)
-					} else {
-						fmt.Printf("  %s deleted remote branch %s\n", style.Success.Render("✓"), branchToDelete)
-					}
-				}
-			} else {
-				// Force flag set: delete remote branch unconditionally
-				if err := repoGit.DeleteRemoteBranch("origin", branchToDelete); err != nil {
-					fmt.Printf("  %s remote branch delete: %v\n", style.Dim.Render("○"), err)
-				} else {
-					fmt.Printf("  %s deleted remote branch %s\n", style.Success.Render("✓"), branchToDelete)
-				}
-			}
-		}
+		fmt.Printf("  %s remote branch preserved for refinery merge\n", style.Dim.Render("○"))
 	}
 
 	// Step 5: Reset agent bead for reuse (if exists)
