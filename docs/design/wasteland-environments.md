@@ -13,11 +13,11 @@
 A molecule step already declares *which model* it wants to run on. This design extends that principle to *which environment* it runs in: what tools are available, what network policy applies, which secrets are visible.
 
 **Key terminology**:
-- **Town** — a Gas Town instance. Multiple towns can run on the same machine; each is a sovereign, isolated process with its own configuration and environment. A town may contain several rigs.
-- **Rig** — a git repository (chain) inside a town.
+- **Town** — a Gas Town instance. A single `gt` daemon process runs per town. Multiple towns can coexist on the same machine, each sovereign with its own configuration and environment. Rigs live as subdirectories inside the town.
+- **Rig** — a git repository (subdirectory) managed by the town daemon. All rigs in a town share the same environment; capabilities are a town-level concern.
 - **Wasteland** — a federation of towns, coordinated via the shared `wl-commons` DoltHub database.
 
-Environment capabilities are declared at the **town** level (`~/.gt/envs.toml`). A step that needs a specific environment is delegated to the right town via the Wasteland; once there, it runs in whichever rig is appropriate.
+Environment capabilities are declared at the **town** level (`~/.gt/envs.toml`) and are uniform across all rigs in that town. A step that needs a specific environment is delegated to the right town via the Wasteland.
 
 **This document does not cover** how an environment is created — container, VM, bare metal. That is the responsibility of the town that hosts it. This document covers only:
 
@@ -134,7 +134,7 @@ The model constraint (`model`, `min_swe`, etc.) implicitly drives agent selectio
 
 The Wasteland (`internal/wasteland/`) is the Gas Town federation: each town holds a sovereign fork of the shared **`wl-commons`** DoltHub database, synchronised via fork/PR/merge.
 
-Town registration writes a row to `wl-commons.rigs` (one row per town in the current implementation; a town with multiple rigs may eventually have multiple rows keyed by rig handle):
+Town registration writes one row to `wl-commons.rigs` per town. Rigs are internal subdirectories of the town and are not separately registered in the Wasteland:
 
 ```sql
 -- existing columns
@@ -380,7 +380,6 @@ model = "claude-sonnet-4-5"
 | **Profile versioning** | `env_profiles` in the `rigs` row is updated on each `gt wl sync`. Peer towns read stale manifests until their next sync. Is eventual consistency sufficient, or does capability routing need fresher data? |
 | **Transitive delegation** | Town A delegates to Town B which delegates to Town C — should chained delegation be allowed? The `parent_completion_id` column in `completions` hints at this, but the lifecycle isn't defined. |
 | **`sandbox_scope` schema** | The `wanted.sandbox_scope` column (JSON) already exists. What is the canonical schema for a molecule step payload? At minimum: `mol_id`, `step_id`, `env`, `instructions`, `result_bead_prefix`. |
-| **Town vs rig granularity** | `wl-commons.rigs` currently has one row per participant. If a town has multiple rigs with different capabilities (e.g. one rig with GPU access, another isolated), should `env_profiles` be per-town or per-rig? |
 | **Agent version pinning** | Should a step be able to require a minimum agent version (e.g. `claude >= 1.2`)? `gt_version` is in `rigs` but refers to the Gas Town binary, not the agent. |
 | **Model↔agent mismatch** | If a step declares `model = "claude-opus-4-6"` but the matched town's profile has `agent = "gemini"`, the router should reject. Is this validated at `wl post` time or at claim time? |
 | **Hook portability** | Claude hooks (`settings.json`) and OpenCode hooks (plugin JS) are agent-specific. If a step depends on a `session_start` hook for context injection, does that constraint propagate to the capability manifest? |
