@@ -22,7 +22,6 @@ import (
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mail"
-	"github.com/steveyegge/gastown/internal/protocol"
 	"github.com/steveyegge/gastown/internal/rig"
 )
 
@@ -958,19 +957,26 @@ func (e *Engineer) HandleMRInfoFailure(mr *MRInfo, result ProcessResult) {
 		return
 	}
 
-	// Notify Witness of the failure so polecat can be alerted
-	// Determine failure type from result
+	// Nudge polecat directly about the merge failure.
+	// Previously sent MERGE_FAILED mail to witness (which relayed to polecat),
+	// but that created permanent Dolt commits for routine protocol signals.
+	// The witness discovers merge failures from MR bead status during patrol.
 	failureType := "build"
 	if result.Conflict {
 		failureType = "conflict"
 	} else if result.TestsFailed {
 		failureType = "tests"
 	}
-	msg := protocol.NewMergeFailedMessage(e.rig.Name, mr.Worker, mr.Branch, mr.SourceIssue, mr.Target, failureType, result.Error)
-	if err := e.router.Send(msg); err != nil {
-		fmt.Fprintf(e.output, "[Engineer] Warning: failed to send MERGE_FAILED to witness: %v\n", err)
+	polecatName := strings.TrimPrefix(mr.Worker, "polecats/")
+	nudgeTarget := fmt.Sprintf("%s/%s", e.rig.Name, polecatName)
+	nudgeMsg := fmt.Sprintf("MERGE_FAILED: branch=%s issue=%s type=%s error=%s — fix and resubmit with 'gt done'",
+		mr.Branch, mr.SourceIssue, failureType, result.Error)
+	nudgeCmd := exec.Command("gt", "nudge", nudgeTarget, nudgeMsg)
+	nudgeCmd.Dir = e.workDir
+	if err := nudgeCmd.Run(); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to nudge %s about merge failure: %v\n", polecatName, err)
 	} else {
-		fmt.Fprintf(e.output, "[Engineer] Notified witness of merge failure for %s\n", mr.Worker)
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Nudged %s about merge failure (%s)\n", polecatName, failureType)
 	}
 
 	// If this was a conflict, create a conflict-resolution task for dispatch
@@ -1485,15 +1491,19 @@ func (e *Engineer) notifyDeaconConvoyFeeding(mr *MRInfo) {
 		return
 	}
 
-	msg := protocol.NewConvoyNeedsFeedingMessage(e.rig.Name, mr.ConvoyID, mr.SourceIssue)
-	if err := e.router.Send(msg); err != nil {
-		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to notify deacon of convoy feeding for %s: %v\n", mr.ConvoyID, err)
+	// Nudge deacon about convoy feeding instead of sending permanent mail.
+	// The deacon discovers convoy state from beads on next patrol cycle;
+	// this nudge just accelerates discovery.
+	nudgeMsg := fmt.Sprintf("CONVOY_NEEDS_FEEDING: convoy=%s issue=%s", mr.ConvoyID, mr.SourceIssue)
+	nudgeCmd := exec.Command("gt", "nudge", "deacon", nudgeMsg)
+	nudgeCmd.Dir = e.workDir
+	if err := nudgeCmd.Run(); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to nudge deacon about convoy feeding for %s: %v\n", mr.ConvoyID, err)
 	} else {
-		_, _ = fmt.Fprintf(e.output, "[Engineer] Notified deacon: CONVOY_NEEDS_FEEDING %s\n", mr.ConvoyID)
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Nudged deacon: CONVOY_NEEDS_FEEDING %s\n", mr.ConvoyID)
 	}
 
-	// Emit event to wake deacon from await-signal (router.Send doesn't write
-	// to .events.jsonl, but await-signal watches the events file).
+	// Emit event to wake deacon from await-signal.
 	_ = events.LogFeed(events.TypeMail, e.rig.Name+"/refinery", events.MailPayload("deacon/", "CONVOY_NEEDS_FEEDING "+mr.ConvoyID))
 }
 

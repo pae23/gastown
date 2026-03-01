@@ -72,7 +72,7 @@ type HandlerResult struct {
 	Handled      bool
 	Action       string
 	WispCreated  string // ID of created wisp (if any)
-	MailSent     string // ID of sent mail (if any)
+	MailSent     string // Deprecated: was ID of sent mail. Notifications now use nudge.
 	Error        error
 }
 
@@ -210,30 +210,19 @@ func handlePolecatDonePendingMR(workDir, rigName string, payload *PolecatDonePay
 		result.Error = fmt.Errorf("updating wisp state: %w", err)
 	}
 
-	if router != nil {
-		notifyRefineryMergeReady(workDir, rigName, payload, router, result)
-	}
+	notifyRefineryMergeReady(workDir, rigName, payload, result)
 
 	result.Handled = true
 	result.WispCreated = wispID
-	result.Action = fmt.Sprintf("deferred cleanup for %s (pending MR=%s, MERGE_READY sent to refinery)", payload.PolecatName, payload.MRID)
+	result.Action = fmt.Sprintf("deferred cleanup for %s (pending MR=%s, nudged refinery)", payload.PolecatName, payload.MRID)
 	return result
 }
 
-// notifyRefineryMergeReady sends a MERGE_READY signal to the Refinery and nudges it.
+// notifyRefineryMergeReady nudges the Refinery to check the merge queue.
+// Previously sent MERGE_READY mail (creating permanent Dolt commits); now
+// just nudges. The Refinery discovers pending MRs from beads queries.
 // Errors are non-fatal (Refinery will still pick up work on next patrol cycle).
-func notifyRefineryMergeReady(workDir, rigName string, payload *PolecatDonePayload, router *mail.Router, result *HandlerResult) {
-	mailID, err := sendMergeReady(router, rigName, payload)
-	if err != nil {
-		if result.Error != nil {
-			result.Error = fmt.Errorf("sending MERGE_READY: %w (also: %v)", err, result.Error)
-		} else {
-			result.Error = fmt.Errorf("sending MERGE_READY: %w (non-fatal)", err)
-		}
-		return
-	}
-	result.MailSent = mailID
-
+func notifyRefineryMergeReady(workDir, rigName string, payload *PolecatDonePayload, result *HandlerResult) {
 	townRoot, _ := workspace.Find(workDir)
 	if nudgeErr := nudgeRefinery(townRoot, rigName); nudgeErr != nil {
 		if result.Error == nil {
@@ -409,37 +398,19 @@ func HandleMergeFailed(workDir, rigName string, msg *mail.Message, router *mail.
 		return result
 	}
 
-	// Notify the polecat about the failure
-	polecatAddr := fmt.Sprintf("%s/polecats/%s", rigName, payload.PolecatName)
-	notification := &mail.Message{
-		From:     fmt.Sprintf("%s/witness", rigName),
-		To:       polecatAddr,
-		Subject:  fmt.Sprintf("Merge failed: %s", payload.FailureType),
-		Priority: mail.PriorityHigh,
-		Type:     mail.TypeTask,
-		Body: fmt.Sprintf(`Your merge request was rejected.
-
-Branch: %s
-Issue: %s
-Failure: %s
-Error: %s
-
-Please fix the issue and resubmit with 'gt done'.`,
-			payload.Branch,
-			payload.IssueID,
-			payload.FailureType,
-			payload.Error,
-		),
-	}
-
-	if err := router.Send(notification); err != nil {
-		result.Error = fmt.Errorf("sending failure notification: %w", err)
+	// Nudge the polecat about the failure instead of sending permanent mail.
+	initRegistryFromWorkDir(workDir)
+	sessionName := session.PolecatSessionName(session.PrefixFor(rigName), payload.PolecatName)
+	nudgeMsg := fmt.Sprintf("MERGE_FAILED: branch=%s issue=%s type=%s error=%s — fix and resubmit with 'gt done'",
+		payload.Branch, payload.IssueID, payload.FailureType, payload.Error)
+	t := tmux.NewTmux()
+	if err := t.NudgeSession(sessionName, nudgeMsg); err != nil {
+		result.Error = fmt.Errorf("nudging polecat about failure: %w", err)
 		return result
 	}
 
 	result.Handled = true
-	result.MailSent = notification.ID
-	result.Action = fmt.Sprintf("notified %s of merge failure: %s - %s", payload.PolecatName, payload.FailureType, payload.Error)
+	result.Action = fmt.Sprintf("nudged %s about merge failure: %s - %s", payload.PolecatName, payload.FailureType, payload.Error)
 
 	return result
 }
@@ -642,35 +613,7 @@ func findMRBeadForBranch(workDir, branch string) string {
 	return ""
 }
 
-// sendMergeReady sends a MERGE_READY notification to the Refinery.
-// This signals that a polecat's work is ready for merge queue processing.
-func sendMergeReady(router *mail.Router, rigName string, payload *PolecatDonePayload) (string, error) {
-	msg := mail.NewMessage(
-		fmt.Sprintf("%s/witness", rigName),
-		fmt.Sprintf("%s/refinery", rigName),
-		fmt.Sprintf("MERGE_READY %s", payload.PolecatName),
-		fmt.Sprintf(`Branch: %s
-Issue: %s
-MR: %s
-Polecat: %s
-Verified: clean git state`,
-			payload.Branch,
-			payload.IssueID,
-			payload.MRID,
-			payload.PolecatName,
-		),
-	)
-	msg.Priority = mail.PriorityHigh
-	msg.Type = mail.TypeTask
-
-	if err := router.Send(msg); err != nil {
-		return "", err
-	}
-
-	return msg.ID, nil
-}
-
-// nudgeRefinery wakes the refinery session to check its inbox.
+// nudgeRefinery wakes the refinery session to check the merge queue.
 // Uses immediate delivery: sends directly to the tmux pane.
 // No cooperative queue — idle agents never call Drain(), so queued
 // nudges would be stuck forever. Direct delivery is safe: if the
@@ -688,7 +631,7 @@ func nudgeRefinery(townRoot, rigName string) error {
 
 	if !running {
 		// Refinery not running - daemon will start it on next heartbeat.
-		// The MERGE_READY mail will be waiting in its inbox.
+		// MR beads are discoverable from the merge queue.
 		return nil
 	}
 
@@ -696,7 +639,7 @@ func nudgeRefinery(townRoot, rigName string) error {
 	// No cooperative queue — idle agents never call Drain(), so queued
 	// nudges would be stuck forever. Direct delivery is safe: if the
 	// agent is busy, text buffers in tmux and is processed at next prompt.
-	return t.NudgeSession(sessionName, "MERGE_READY received - check inbox for pending work")
+	return t.NudgeSession(sessionName, "New MR available - check merge queue for pending work")
 }
 
 // RecoveryPayload contains data for RECOVERY_NEEDED escalation.
@@ -709,44 +652,19 @@ type RecoveryPayload struct {
 	DetectedAt    time.Time
 }
 
-// EscalateRecoveryNeeded sends a RECOVERY_NEEDED escalation to the Deacon.
-// This is used when a dormant polecat has unpushed work that needs recovery
-// before cleanup. The Deacon should coordinate recovery (e.g., push the branch,
-// save the work) before authorizing cleanup. Only escalates to Mayor if Deacon
-// cannot resolve.
-func EscalateRecoveryNeeded(router *mail.Router, rigName string, payload *RecoveryPayload) (string, error) {
-	msg := &mail.Message{
-		From:     fmt.Sprintf("%s/witness", rigName),
-		To:       "deacon/",
-		Subject:  fmt.Sprintf("RECOVERY_NEEDED %s/%s", rigName, payload.PolecatName),
-		Priority: mail.PriorityUrgent,
-		Body: fmt.Sprintf(`Polecat: %s/%s
-Cleanup Status: %s
-Branch: %s
-Issue: %s
-Detected: %s
-
-This polecat has unpushed/uncommitted work that will be lost if nuked.
-Please coordinate recovery before authorizing cleanup:
-1. Check if branch can be pushed to origin
-2. Review uncommitted changes for value
-3. Either recover the work or authorize force-nuke
-
-DO NOT nuke without --force after recovery.`,
-			rigName,
-			payload.PolecatName,
-			payload.CleanupStatus,
-			payload.Branch,
-			payload.IssueID,
-			payload.DetectedAt.Format(time.RFC3339),
-		),
+// EscalateRecoveryNeeded nudges the Deacon about a RECOVERY_NEEDED situation.
+// Previously sent permanent mail; now uses ephemeral nudge since the deacon
+// can discover recovery state from cleanup wisps and polecat status.
+func EscalateRecoveryNeeded(workDir, rigName string, payload *RecoveryPayload) (string, error) {
+	initRegistryFromWorkDir(workDir)
+	sessionName := session.DeaconSessionName()
+	nudgeMsg := fmt.Sprintf("RECOVERY_NEEDED: %s/%s cleanup_status=%s branch=%s issue=%s detected=%s — coordinate recovery before authorizing cleanup",
+		rigName, payload.PolecatName, payload.CleanupStatus, payload.Branch, payload.IssueID, payload.DetectedAt.Format(time.RFC3339))
+	t := tmux.NewTmux()
+	if err := t.NudgeSession(sessionName, nudgeMsg); err != nil {
+		return "", fmt.Errorf("nudging deacon about recovery: %w", err)
 	}
-
-	if err := router.Send(msg); err != nil {
-		return "", err
-	}
-
-	return msg.ID, nil
+	return "nudge", nil
 }
 
 // UpdateCleanupWispState updates a cleanup wisp's state label.
@@ -1047,14 +965,12 @@ func DetectZombiePolecats(workDir, rigName string, router *mail.Router) *DetectZ
 						WasActive:   false,
 						Action:      "escalated-dirty-idle-polecat",
 					}
-					if router != nil {
-						EscalateRecoveryNeeded(router, rigName, &RecoveryPayload{
-							PolecatName:   polecatName,
-							Rig:           rigName,
-							CleanupStatus: cleanupStatus,
-							DetectedAt:    time.Now(),
-						})
-					}
+					EscalateRecoveryNeeded(workDir, rigName, &RecoveryPayload{
+						PolecatName:   polecatName,
+						Rig:           rigName,
+						CleanupStatus: cleanupStatus,
+						DetectedAt:    time.Now(),
+					})
 					result.Zombies = append(result.Zombies, zombie)
 				}
 				// Clean idle polecat — healthy, skip entirely.
@@ -1248,17 +1164,15 @@ func handleZombieRestart(workDir, rigName, polecatName, hookBead, cleanupStatus 
 		if existingWisp != "" {
 			zombie.Action = fmt.Sprintf("already-tracked (cleanup_status=%s, existing-wisp=%s)", cleanupStatus, existingWisp)
 		} else {
-			if router != nil {
-				_, escErr := EscalateRecoveryNeeded(router, rigName, &RecoveryPayload{
-					PolecatName:   polecatName,
-					Rig:           rigName,
-					CleanupStatus: cleanupStatus,
-					IssueID:       hookBead,
-					DetectedAt:    time.Now(),
-				})
-				if escErr != nil {
-					zombie.Error = escErr
-				}
+			_, escErr := EscalateRecoveryNeeded(workDir, rigName, &RecoveryPayload{
+				PolecatName:   polecatName,
+				Rig:           rigName,
+				CleanupStatus: cleanupStatus,
+				IssueID:       hookBead,
+				DetectedAt:    time.Now(),
+			})
+			if escErr != nil {
+				zombie.Error = escErr
 			}
 			wispID, wispErr := createCleanupWisp(workDir, polecatName, hookBead, "")
 			if wispErr != nil && zombie.Error == nil {
@@ -1306,17 +1220,15 @@ func handleZombieCleanup(workDir, rigName, polecatName, hookBead, cleanupStatus 
 			zombie.Action = fmt.Sprintf("already-tracked (cleanup_status=%s, existing-wisp=%s)", cleanupStatus, existingWisp)
 			return
 		}
-		if router != nil {
-			_, escErr := EscalateRecoveryNeeded(router, rigName, &RecoveryPayload{
-				PolecatName:   polecatName,
-				Rig:           rigName,
-				CleanupStatus: cleanupStatus,
-				IssueID:       hookBead,
-				DetectedAt:    time.Now(),
-			})
-			if escErr != nil {
-				zombie.Error = escErr
-			}
+		_, escErr := EscalateRecoveryNeeded(workDir, rigName, &RecoveryPayload{
+			PolecatName:   polecatName,
+			Rig:           rigName,
+			CleanupStatus: cleanupStatus,
+			IssueID:       hookBead,
+			DetectedAt:    time.Now(),
+		})
+		if escErr != nil {
+			zombie.Error = escErr
 		}
 		wispID, wispErr := createCleanupWisp(workDir, polecatName, hookBead, "")
 		if wispErr != nil && zombie.Error == nil {
@@ -1589,27 +1501,15 @@ func processDiscoveredCompletion(workDir, rigName string, payload *PolecatDonePa
 			discovery.Error = fmt.Errorf("updating wisp state: %w", err)
 		}
 
-		if router != nil {
-			mailID, err := sendMergeReady(router, rigName, payload)
-			if err != nil {
-				if discovery.Error != nil {
-					discovery.Error = fmt.Errorf("sending MERGE_READY: %w (also: %v)", err, discovery.Error)
-				} else {
-					discovery.Error = fmt.Errorf("sending MERGE_READY: %w (non-fatal)", err)
-				}
-			} else {
-				_ = mailID // Logged via discovery.Action
-
-				townRoot, _ := workspace.Find(workDir)
-				if nudgeErr := nudgeRefinery(townRoot, rigName); nudgeErr != nil {
-					if discovery.Error == nil {
-						discovery.Error = fmt.Errorf("nudging refinery: %w (non-fatal)", nudgeErr)
-					}
-				}
+		// Nudge refinery to check merge queue (no permanent mail needed).
+		townRoot, _ := workspace.Find(workDir)
+		if nudgeErr := nudgeRefinery(townRoot, rigName); nudgeErr != nil {
+			if discovery.Error == nil {
+				discovery.Error = fmt.Errorf("nudging refinery: %w (non-fatal)", nudgeErr)
 			}
 		}
 
-		discovery.Action = fmt.Sprintf("merge-ready-sent (MR=%s, wisp=%s)", payload.MRID, wispID)
+		discovery.Action = fmt.Sprintf("merge-ready-nudged (MR=%s, wisp=%s)", payload.MRID, wispID)
 		return
 	}
 
