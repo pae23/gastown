@@ -50,10 +50,15 @@
 {"issue_id":"gt-gastown-polecat-coma","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-dag","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-dementus","label":"gt:agent"}
+{"issue_id":"gt-gastown-polecat-dementus","label":"gt:agent"}
+{"issue_id":"gt-gastown-polecat-furiosa","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-furiosa","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-keeper","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-nux","label":"gt:agent"}
+{"issue_id":"gt-gastown-polecat-nux","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-rictus","label":"gt:agent"}
+{"issue_id":"gt-gastown-polecat-rictus","label":"gt:agent"}
+{"issue_id":"gt-gastown-polecat-slit","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-slit","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-toast","label":"gt:agent"}
 {"issue_id":"gt-gastown-polecat-valkyrie","label":"gt:agent"}
@@ -121,6 +126,11 @@
 {"issue_id":"gt-td6p","label":"formula"}
 {"issue_id":"gt-tsut","label":"zfc-violation"}
 {"issue_id":"gt-utbjv","label":"worker-lifecycle"}
+{"issue_id":"gt-wisp-6qoaa","label":"gt:merge-request"}
+{"issue_id":"gt-wisp-h1ql5","label":"gt:merge-request"}
+{"issue_id":"gt-wisp-hx1se","label":"gt:merge-request"}
+{"issue_id":"gt-wisp-iti8n","label":"gt:merge-request"}
+{"issue_id":"gt-wisp-qb6zd","label":"gt:merge-request"}
 {"issue_id":"gt-witness-role","label":"migrated-to:hq-witness-role"}
 {"issue_id":"gt-wrdz","label":"cleanup"}
 {"issue_id":"gt-xpgh8","label":"desire-path"}
