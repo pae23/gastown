@@ -136,6 +136,12 @@ type DoltServerManager struct {
 	// Populated by checkHealthLocked(), consumed by Daemon.ensureDoltServerRunning().
 	lastWarnings []string // Warnings from the most recent health check
 
+	// onRecoveryFn is called (in a goroutine) when the Dolt server transitions
+	// from unhealthy back to healthy, i.e., when the DOLT_UNHEALTHY signal file
+	// is cleared after having been present. Set by SetRecoveryCallback.
+	// Protected by mu.
+	onRecoveryFn func()
+
 	// Test hooks (nil = use real implementations; set only in tests)
 	healthCheckFn      func() error
 	writeProbeCheckFn  func() error
@@ -162,6 +168,15 @@ func NewDoltServerManager(townRoot string, config *DoltServerConfig, logger func
 		townRoot: townRoot,
 		logger:   logger,
 	}
+}
+
+// SetRecoveryCallback registers fn to be called (in a goroutine) whenever Dolt
+// transitions from unhealthy back to healthy. Only the most recently registered
+// callback is used. Pass nil to clear the callback.
+func (m *DoltServerManager) SetRecoveryCallback(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRecoveryFn = fn
 }
 
 func (m *DoltServerManager) now() time.Time {
@@ -719,8 +734,18 @@ func (m *DoltServerManager) writeUnhealthySignal(reason, detail string) {
 }
 
 // clearUnhealthySignal removes the DOLT_UNHEALTHY signal file when the server is healthy.
+// If the signal file was present (meaning Dolt was previously unhealthy), it fires the
+// onRecoveryFn callback in a goroutine to trigger a convoy recovery sweep.
+// Must be called with mu held (onRecoveryFn is protected by mu).
 func (m *DoltServerManager) clearUnhealthySignal() {
-	_ = os.Remove(m.unhealthySignalFile())
+	signalFile := m.unhealthySignalFile()
+	_, wasUnhealthy := os.Stat(signalFile)
+	_ = os.Remove(signalFile)
+	// Transition detected: was unhealthy, now healthy — fire recovery callback.
+	if wasUnhealthy == nil && m.onRecoveryFn != nil {
+		fn := m.onRecoveryFn
+		go fn()
+	}
 }
 
 // IsDoltUnhealthy checks if the DOLT_UNHEALTHY signal file exists.
