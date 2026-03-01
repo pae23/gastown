@@ -1031,78 +1031,36 @@ func DetectZombiePolecats(workDir, rigName string, router *mail.Router) *DetectZ
 		doneIntent := extractDoneIntent(labels)
 
 		if sessionAlive {
-			if zombie, found := detectZombieLiveSession(workDir, rigName, polecatName, agentBeadID, sessionName, t, doneIntent); found {
-				result.Zombies = append(result.Zombies, zombie)
-			}
-
-			// gt-dsgp: Restart-first policy. Instead of nuking polecats with dead
-			// agents or hung sessions, restart them to preserve worktrees and branches.
-
-			// Tmux session exists but agent process may have died inside it.
-			// This catches the "tmux-alive-but-agent-dead" zombie class that
-			// status.go detects but DetectZombiePolecats previously missed.
-			// See: gt-kj6r6
-			if !t.IsAgentAlive(sessionName) {
-				_, deadAgentHookBead := getAgentBeadState(workDir, agentBeadID)
-				zombie := ZombieResult{
-					PolecatName: polecatName,
-					AgentState:  "agent-dead-in-session",
-					HookBead:    deadAgentHookBead,
-					WasActive:   true,
-					Action:      "restarted-agent-dead-session",
-				}
-				// gt-dsgp: Restart instead of nuke — preserve worktree and branch
-				if err := RestartPolecatSession(workDir, rigName, polecatName); err != nil {
-					zombie.Error = err
-					zombie.Action = fmt.Sprintf("restart-agent-dead-session-failed: %v", err)
-				}
-				result.Zombies = append(result.Zombies, zombie)
-			} else {
-				// Agent is alive. Check if the hooked bead has been closed.
-				// A polecat that closed its bead but didn't run gt done is
-				// occupying a slot without doing work. See: gt-h1l6i
-				// gt-dsgp: Restart instead of nuke — the fresh session will
-				// pick up its hook and run gt done properly.
-				_, hookBead := getAgentBeadState(workDir, agentBeadID)
-				if hookBead != "" && getBeadStatus(workDir, hookBead) == "closed" {
+			// gt-s8bq: Idle Polecat Heresy fix. Idle polecats are HEALTHY — they
+			// have no hook_bead, agent_state="idle", and their sandbox is preserved
+			// for reuse. Skip them entirely during patrol. Only escalate if the
+			// sandbox is dirty (uncommitted changes in idle state).
+			agentState, _ := getAgentBeadState(workDir, agentBeadID)
+			if agentState == string(AgentStateIdle) {
+				cleanupStatus := getCleanupStatus(workDir, rigName, polecatName)
+				if cleanupStatus == "dirty" {
 					zombie := ZombieResult{
 						PolecatName: polecatName,
-						AgentState:  "bead-closed-still-running",
-						HookBead:    hookBead,
-						WasActive:   true,
-						Action:      "restarted-bead-closed-polecat",
+						AgentState:  "idle-dirty-sandbox",
+						WasActive:   false,
+						Action:      "escalated-dirty-idle-polecat",
 					}
-					if err := RestartPolecatSession(workDir, rigName, polecatName); err != nil {
-						zombie.Error = err
-						zombie.Action = fmt.Sprintf("restart-bead-closed-failed: %v", err)
+					if router != nil {
+						EscalateRecoveryNeeded(router, rigName, &RecoveryPayload{
+							PolecatName:   polecatName,
+							Rig:           rigName,
+							CleanupStatus: cleanupStatus,
+							DetectedAt:    time.Now(),
+						})
 					}
 					result.Zombies = append(result.Zombies, zombie)
-				} else {
-					// Agent is alive and bead is not closed — check for hung session.
-					// A session where Claude is alive but has produced no tmux output
-					// for a long time is likely hung (infinite loop, crashed mid-call,
-					// or waiting for something that will never arrive). See: gt-tr3d
-					// gt-dsgp: Restart instead of nuke — give the polecat a fresh start.
-					lastActivity, actErr := t.GetSessionActivity(sessionName)
-					if actErr == nil && !lastActivity.IsZero() {
-						inactiveMinutes := int(time.Since(lastActivity).Minutes())
-						if inactiveMinutes >= HungSessionThresholdMinutes {
-							_, hungHookBead := getAgentBeadState(workDir, agentBeadID)
-							zombie := ZombieResult{
-								PolecatName: polecatName,
-								AgentState:  "agent-hung",
-								HookBead:    hungHookBead,
-								WasActive:   true,
-								Action:      fmt.Sprintf("restarted-hung-session (inactive %dm)", inactiveMinutes),
-							}
-							if err := RestartPolecatSession(workDir, rigName, polecatName); err != nil {
-								zombie.Error = err
-								zombie.Action = fmt.Sprintf("restart-hung-session-failed: %v", err)
-							}
-							result.Zombies = append(result.Zombies, zombie)
-						}
-					}
 				}
+				// Clean idle polecat — healthy, skip entirely.
+				continue
+			}
+
+			if zombie, found := detectZombieLiveSession(workDir, rigName, polecatName, agentBeadID, sessionName, t, doneIntent); found {
+				result.Zombies = append(result.Zombies, zombie)
 			}
 			continue // Either handled or not a zombie
 		}
