@@ -15,10 +15,10 @@ import (
 // load-modify-save cycles from losing respawn count increments.
 var respawnMu sync.Mutex
 
-// defaultMaxBeadRespawns is the threshold above which a SPAWN_STORM warning is
-// included in the RECOVERED_BEAD mail sent to deacon. It does not block respawns
-// — the intent is audit visibility so deacon/mayor can investigate.
-const defaultMaxBeadRespawns = 2
+// defaultMaxBeadRespawns is the threshold at which respawns are BLOCKED and
+// the bead is escalated to mayor instead of re-dispatched. This is the
+// circuit breaker that prevents spawn storms (clown show #22).
+const defaultMaxBeadRespawns = 3
 
 // beadRespawnRecord tracks how many times a single bead has been reset for re-dispatch.
 type beadRespawnRecord struct {
@@ -63,6 +63,26 @@ func saveBeadRespawnState(townRoot string, state *beadRespawnState) error {
 		return fmt.Errorf("marshaling respawn state: %w", err)
 	}
 	return os.WriteFile(stateFile, data, 0600)
+}
+
+// shouldBlockRespawn returns true if the bead has already been respawned
+// defaultMaxBeadRespawns times. When true, the caller should escalate to
+// mayor instead of sending RECOVERED_BEAD to deacon for re-dispatch.
+// This is the primary circuit breaker for spawn storms (clown show #22).
+func shouldBlockRespawn(workDir, beadID string) bool {
+	respawnMu.Lock()
+	defer respawnMu.Unlock()
+
+	townRoot, err := workspace.Find(workDir)
+	if err != nil || townRoot == "" {
+		townRoot = workDir
+	}
+	state := loadBeadRespawnState(townRoot)
+	rec, ok := state.Beads[beadID]
+	if !ok {
+		return false
+	}
+	return rec.Count >= defaultMaxBeadRespawns
 }
 
 // recordBeadRespawn increments the respawn count for beadID and returns the new count.

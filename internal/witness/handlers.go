@@ -1609,6 +1609,32 @@ func resetAbandonedBead(workDir, rigName, hookBead, polecatName string, router *
 		return false
 	}
 
+	// Circuit breaker (clown show #22): if this bead has already been
+	// respawned too many times, escalate to mayor instead of re-dispatching.
+	// This prevents the witness→deacon→spawn feedback loop from creating
+	// unbounded polecats when a task repeatedly kills its polecat.
+	if shouldBlockRespawn(workDir, hookBead) {
+		if router != nil {
+			msg := &mail.Message{
+				From:     fmt.Sprintf("%s/witness", rigName),
+				To:       "mayor/",
+				Subject:  fmt.Sprintf("SPAWN_BLOCKED %s (respawn limit reached)", hookBead),
+				Priority: mail.PriorityUrgent,
+				Body: fmt.Sprintf(`Bead %s has been respawned %d+ times and keeps failing.
+Re-dispatch blocked to prevent spawn storm.
+
+Polecat: %s/%s
+Previous Status: %s
+
+Action required: investigate why this task keeps killing its polecat,
+then either close the bead or reset the respawn counter.`,
+					hookBead, defaultMaxBeadRespawns, rigName, polecatName, status),
+			}
+			_ = router.Send(msg)
+		}
+		return false
+	}
+
 	// Track respawn count for audit and storm detection.
 	respawnCount := recordBeadRespawn(workDir, hookBead)
 
@@ -1622,12 +1648,12 @@ func resetAbandonedBead(workDir, rigName, hookBead, polecatName string, router *
 		subject := fmt.Sprintf("RECOVERED_BEAD %s", hookBead)
 		priority := mail.PriorityHigh
 		stormNote := ""
-		if respawnCount > defaultMaxBeadRespawns {
+		if respawnCount >= defaultMaxBeadRespawns {
 			subject = fmt.Sprintf("SPAWN_STORM RECOVERED_BEAD %s (respawned %dx)", hookBead, respawnCount)
 			priority = mail.PriorityUrgent
 			stormNote = fmt.Sprintf("\n\n⚠️ SPAWN STORM: bead has been reset %d times. "+
-				"A polecat may be exiting without closing its hook bead. "+
-				"Check polecat completion protocol or close the bead manually if not applicable.",
+				"Next respawn will be BLOCKED. "+
+				"Check polecat completion protocol or close the bead manually.",
 				respawnCount)
 		}
 		msg := &mail.Message{
