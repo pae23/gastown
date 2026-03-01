@@ -592,6 +592,67 @@ func findDoltServerOnPort(port int) int {
 	return pid
 }
 
+// DoltListener represents a Dolt process listening on a TCP port.
+type DoltListener struct {
+	PID  int
+	Port int
+}
+
+// FindAllDoltListeners discovers all Dolt processes with TCP listeners using lsof.
+// Uses process binary name matching (-c dolt) instead of command-line string matching
+// (pgrep -f), avoiding fragile ps/pgrep pattern coupling (ZFC fix: gt-fj87).
+func FindAllDoltListeners() []DoltListener {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "lsof", "-c", "dolt", "-sTCP:LISTEN", "-i", "TCP", "-n", "-P", "-F", "pn")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	// Parse lsof -F output. Lines are field-prefixed:
+	//   p<PID>     — process ID
+	//   n<addr>    — network name (e.g., "*:3307" or "127.0.0.1:3307")
+	var listeners []DoltListener
+	var currentPID int
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, err := strconv.Atoi(line[1:])
+			if err == nil {
+				currentPID = pid
+			}
+		case 'n':
+			if currentPID == 0 {
+				continue
+			}
+			// Extract port from address like "*:3307" or "127.0.0.1:3307"
+			addr := line[1:]
+			if idx := strings.LastIndex(addr, ":"); idx >= 0 {
+				port, err := strconv.Atoi(addr[idx+1:])
+				if err == nil {
+					// Deduplicate: same PID can have multiple FDs on same port
+					dup := false
+					for _, l := range listeners {
+						if l.PID == currentPID && l.Port == port {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						listeners = append(listeners, DoltListener{PID: currentPID, Port: port})
+					}
+				}
+			}
+		}
+	}
+	return listeners
+}
+
 // isDoltServerOnPort checks if a dolt server is accepting connections on the given port.
 // More reliable than ps string matching for process identity verification (ZFC fix: gt-utuk).
 func isDoltServerOnPort(port int) bool {
