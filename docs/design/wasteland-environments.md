@@ -1,6 +1,6 @@
-# Federation Capabilities
+# Wasteland Environments
 
-> Mini-spec for environment-aware molecule steps across a Gas Town federation.
+> Mini-spec for environment-aware molecule steps across the Gas Town Wasteland.
 
 **Status**: Draft
 **Related**: [federation.md](federation.md) | [model-aware-molecules.md](model-aware-molecules.md) | [agent-provider-interface.md](agent-provider-interface.md)
@@ -23,10 +23,10 @@ A molecule step already declares *which model* it wants to run on. This design e
 
 ## 2. Core Concept: Environment Profile
 
-An `EnvProfile` is a declaration of what a town can provide to execute a step. It is defined locally by the town and advertised to its federated peers.
+An `EnvProfile` is a declaration of what a rig can provide to execute a step. It is defined locally by the rig and advertised to Wasteland peers.
 
 ```toml
-# ~/.gt/envs.toml  (declared by each town)
+# ~/.gt/envs.toml  (declared by each rig)
 
 [envs.python-isolated]
 description = "Python 3.12 with no network access"
@@ -35,6 +35,7 @@ network     = "isolated"
 secrets     = []                      # nothing injected by default
 tags        = ["python", "isolated"]
 agent       = "claude"                # agent preset running in this environment
+shared      = true                    # visible to Wasteland peers
 
 [envs.node-web]
 description = "Node.js with access to npm registry and GitHub"
@@ -43,6 +44,7 @@ network     = "restricted:registry.npmjs.org,github.com"
 secrets     = ["GITHUB_TOKEN"]
 tags        = ["node", "web"]
 agent       = "claude"
+shared      = true
 
 [envs.secure-sandbox]
 description = "Empty environment, no network, no secrets"
@@ -51,14 +53,16 @@ network     = "isolated"
 secrets     = []
 tags        = ["sandbox", "untrusted"]
 agent       = "gemini"                # any agent that supports non-interactive mode
+shared      = true
 
 [envs.full]
-description = "Standard town environment (default)"
+description = "Standard rig environment (default)"
 tools       = []                      # empty = whatever is on the machine
 network     = "full"
 secrets     = ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"]
 tags        = ["default"]
 agent       = "claude"
+shared      = false                   # internal only (default)
 ```
 
 ### Profile Fields
@@ -72,7 +76,7 @@ agent       = "claude"
 | `tags` | []string | Free-form labels used for capability matching |
 | `agent` | string | Agent preset name (`"claude"`, `"gemini"`, `"codex"`, …). Empty = any available agent |
 | `resources` | table | Optional: cpu, memory, timeout |
-| `federated` | bool | Whether this profile is advertised to federation peers (default: false) |
+| `shared` | bool | Whether this profile is advertised to Wasteland peers (default: false) |
 
 The `agent` field maps to an entry in `builtinPresets` (`internal/config/agents.go`). It determines which CLI binary is launched, how readiness is detected, and which capabilities (hooks, non-interactive mode, session resume) are available for the step. See [agent-provider-interface.md](agent-provider-interface.md) for the full capability matrix.
 
@@ -88,7 +92,7 @@ id    = "run-tests"
 title = "Run test suite"
 model = "auto"
 
-# Option A: exact profile name (resolved locally first, then in the federation)
+# Option A: exact profile name (resolved locally first, then via the Wasteland)
 env = "python-isolated"
 
 # Option B: capability-based matching (runtime finds a compatible profile)
@@ -103,25 +107,25 @@ env_agent = "gemini"
 
 `env` and `env_tools/env_network/env_tags` are mutually exclusive.
 `env_agent` may be combined with either option.
-A step with no environment constraint uses the local town's `"full"` profile — identical to current behaviour.
+A step with no environment constraint uses the local rig's `"full"` profile — identical to current behaviour.
 
-The model constraint (`model`, `min_swe`, etc.) implicitly drives agent selection: a step requiring `claude-sonnet-4-5` can only execute on a town where the `claude` preset is available. The router resolves this automatically — `env_agent` is only needed when the agent matters independently of the model (e.g. "run this in Codex regardless of which model it uses").
+The model constraint (`model`, `min_swe`, etc.) implicitly drives agent selection: a step requiring `claude-sonnet-4-5` can only execute on a rig where the `claude` preset is available. The router resolves this automatically — `env_agent` is only needed when the agent matters independently of the model (e.g. "run this in Codex regardless of which model it uses").
 
 ### Resolution Priority
 
 ```
-1. env = "exact-name"  found in local town              → local execution
-2. env = "exact-name"  found in a federated town        → delegation
-3. env_tools/env_tags  matched in local town            → local execution
-4. env_tools/env_tags  matched in federated town        → delegation
-5. No match anywhere                                     → step blocked, error
+1. env = "exact-name"  found on local rig              → local execution
+2. env = "exact-name"  found on a Wasteland peer       → Wasteland delegation
+3. env_tools/env_tags  matched on local rig            → local execution
+4. env_tools/env_tags  matched on a Wasteland peer     → Wasteland delegation
+5. No match anywhere                                    → step blocked, error
 ```
 
 ---
 
 ## 4. Capability Manifest in the Wasteland
 
-The Wasteland (`internal/wasteland/`) is the existing Gas Town federation: each rig holds a sovereign fork of the shared **`wl-commons`** DoltHub database, synchronised via fork/PR/merge.
+The Wasteland (`internal/wasteland/`) is the Gas Town federation: each rig holds a sovereign fork of the shared **`wl-commons`** DoltHub database, synchronised via fork/PR/merge.
 
 Rig registration already writes a row to `wl-commons.rigs`:
 
@@ -131,7 +135,7 @@ handle, display_name, dolthub_org, hop_uri, owner_email, gt_version,
 trust_level, registered_at, last_seen, rig_type, parent_rig
 ```
 
-The capability manifest extends this row with an `env_profiles` JSON column. Each entry is a federated `EnvProfile` (profiles with `federated = false` are excluded):
+The capability manifest extends this row with an `env_profiles` JSON column. Each entry is a shared `EnvProfile` (profiles with `shared = false` are excluded):
 
 ```json
 {
@@ -167,7 +171,7 @@ The capability manifest extends this row with an `env_profiles` JSON column. Eac
 Secrets are never advertised. The manifest is updated by `gt wl sync` whenever `~/.gt/envs.toml` changes.
 
 ```bash
-# Inspect a Wasteland peer's capabilities
+# Inspect a Wasteland peer's environments
 gt wl caps <rig-handle>
 
 # Output:
@@ -177,9 +181,9 @@ gt wl caps <rig-handle>
 
 ---
 
-## 5. Federated Step Routing
+## 5. Wasteland Step Routing
 
-Routing happens in two passes, with no new protocol — built entirely on the existing **Wasteland** primitives (`gt wl post / claim / done / sync`).
+Routing happens in two passes, with no new protocol — built entirely on existing **Wasteland** primitives (`gt wl post / claim / done / sync`).
 
 ### Pass 1: Local Resolution
 
@@ -199,14 +203,14 @@ If no local profile satisfies the constraints, the step is distributed as a **wa
 
 ```sql
 -- wanted row for a delegated molecule step
-id              = "w-<hash>"
-title           = "mol: <formula-id>/<step-id>"
-type            = "mol-step"
-posted_by       = "<local-rig-handle>"
+id               = "w-<hash>"
+title            = "mol: <formula-id>/<step-id>"
+type             = "mol-step"
+posted_by        = "<local-rig-handle>"
 sandbox_required = 1
-sandbox_scope   = '{"env":"python-isolated","mol_id":"...","step_id":"..."}'
+sandbox_scope    = '{"env":"python-isolated","mol_id":"...","step_id":"..."}'
 sandbox_min_tier = "isolated"
-status          = "open"
+status           = "open"
 ```
 
 4. The target rig runs `gt wl sync` and sees the matching wanted item (`claimed_by` is empty, `sandbox_scope.env` matches a local profile)
@@ -233,24 +237,24 @@ The delegated step appears in the local molecule like any other step — it carr
 
 ---
 
-## 6. Agent Execution on Remote Towns
+## 6. Agent Execution on Remote Rigs
 
-When a step is delegated, the remote town executes it using its local `AgentPresetInfo` machinery — the same infrastructure used for all local agent orchestration. There is no special federation execution path.
+When a step is delegated, the remote rig executes it using its local `AgentPresetInfo` machinery — the same infrastructure used for all local agent orchestration. There is no special Wasteland execution path.
 
 ### Execution Modes
 
-Federated steps are always headless. The remote town selects an execution mode based on the agent preset's capabilities:
+Wasteland-delegated steps are always headless. The remote rig selects an execution mode based on the agent preset's capabilities:
 
 | Agent has `non_interactive`? | Execution mode | Mechanism |
 |---|---|---|
 | Yes (`claude`, `gemini`, `codex exec`, …) | Direct headless call | `command -p "…"` or `exec` subcommand |
 | No (`auggie`, `amp`, …) | Tmux send-keys | Spawn tmux session, deliver via `send-keys`, poll output via `capture-pane` |
 
-The **tmux shim** is the universal execution floor — any CLI agent that runs in a terminal can execute federated steps, even without a non-interactive API. This is the "zero API" guarantee: participation in federation requires only that an agent can be launched and receive input.
+The **tmux shim** is the universal execution floor — any CLI agent that runs in a terminal can execute Wasteland-delegated steps, even without a non-interactive API. This is the "zero API" guarantee: participation in the Wasteland requires only that an agent can be launched and receive input.
 
 ### Readiness Detection
 
-Once the agent is spawned, the remote town uses `AgentPresetInfo`'s two readiness strategies before delivering the step:
+Once the agent is spawned, the remote rig uses `AgentPresetInfo`'s two readiness strategies before delivering the step:
 
 1. **Prompt-prefix scan** — poll `tmux capture-pane` for the agent's ready prompt (e.g. `❯` for Claude). Reliable for agents with stable prompt characters.
 2. **Delay fallback** — wait `ReadyDelayMs` milliseconds. Used for TUI agents (OpenCode, Codex) whose prompts can't be scanned.
@@ -265,7 +269,7 @@ The `GT_AGENT` env var is set in the remote tmux session, identifying the agent 
 
 ### Graceful Degradation
 
-Every capability has a fallback, so the remote town never hard-blocks on a missing agent feature:
+Every capability has a fallback, so the remote rig never hard-blocks on a missing agent feature:
 
 - No hooks → startup fallback via `gt prime && gt mail check --inject` sent over tmux
 - No non-interactive mode → full tmux session with send-keys delivery
@@ -276,26 +280,26 @@ Every capability has a fallback, so the remote town never hard-blocks on a missi
 
 ## 7. Security Model
 
-**Principle**: the remote town is sovereign over its environment. The local town cannot inspect, modify, or bypass the constraints of a remote profile.
+**Principle**: the remote rig is sovereign over its environment. The local rig cannot inspect, modify, or bypass the constraints of a remote profile.
 
 | Property | Guarantee |
 |---|---|
-| **Network isolation** | Enforced by the remote town; not a matter of trust |
-| **Secrets** | Never transmitted over federation. Pre-provisioned on the remote town |
-| **Tooling** | The remote town certifies its manifest; the local town trusts it |
+| **Network isolation** | Enforced by the remote rig; not a matter of trust |
+| **Secrets** | Never transmitted over the Wasteland. Pre-provisioned on the remote rig |
+| **Tooling** | The remote rig certifies its manifest; the local rig trusts it |
 | **Step content** | The step description and instructions are transmitted. Credentials are not |
-| **Results** | Returned via Dolt sync + mail. No direct channel |
+| **Results** | Returned via `wl done --evidence` + Dolt sync. No direct channel |
 
-A town explicitly chooses which profiles it exposes to the federation via the `federated` field. Profiles default to internal-only.
+A rig explicitly chooses which profiles it exposes to the Wasteland via the `shared` field. Profiles default to internal-only.
 
 ```toml
 [envs.secure-sandbox]
 # ...
-federated = true    # visible to federation peers
+shared = true     # visible to Wasteland peers
 
 [envs.internal-gpu]
 # ...
-federated = false   # internal only (default)
+shared = false    # internal only (default)
 ```
 
 ---
@@ -306,7 +310,7 @@ Addition to the existing `Step` struct (see `internal/formula/types.go`):
 
 ```go
 // Execution environment constraints (all optional).
-// Env is a named profile: resolved locally first, then across the federation.
+// Env is a named profile: resolved locally first, then via the Wasteland.
 Env        string   `toml:"env"`
 // EnvTools requires specific executables to be present in the environment.
 EnvTools   []string `toml:"env_tools"`
@@ -326,7 +330,7 @@ EnvAgent   string   `toml:"env_agent"`
 
 ---
 
-## 9. Multi-Town Molecule Example
+## 9. Multi-Rig Molecule Example
 
 ```toml
 formula = "mol-secure-pipeline"
@@ -339,7 +343,7 @@ title = "Analyze codebase"
 model = "claude-sonnet-4-5"
 
 # Step 2: tests in an isolated sandbox
-# → delegated to a remote town if unavailable locally
+# → delegated to a Wasteland peer if unavailable locally
 [[steps]]
 id      = "test"
 title   = "Run tests in isolation"
@@ -348,7 +352,7 @@ env     = "python-isolated"
 model   = "auto"
 min_swe = 50
 
-# Step 3: synthesis — back on the local town
+# Step 3: synthesis — back on the local rig
 [[steps]]
 id    = "report"
 title = "Synthesize results"
