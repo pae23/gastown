@@ -21,7 +21,7 @@ var (
 
 var agentLogCmd = &cobra.Command{
 	Use:    "agent-log",
-	Short:  "Stream agent conversation events to VictoriaLogs (invoked by session lifecycle)",
+	Short:  "Stream agent conversation events to OTLP log endpoint (invoked by session lifecycle)",
 	Hidden: true,
 	RunE:   runAgentLog,
 }

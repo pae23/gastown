@@ -95,7 +95,7 @@ Each `gt sendkeys` dispatch to an agent's tmux pane.
 |---|---|---|
 | `run.id` | string | run UUID |
 | `session` | string | tmux pane name |
-| `keys` | string | full prompt text |
+| `keys` | string | prompt text (opt-in: `GT_LOG_PROMPT_KEYS=true`; truncated to 256 bytes) |
 | `keys_len` | int | prompt length in bytes |
 | `debounce_ms` | int | applied debounce delay |
 | `status` | string | `"ok"` · `"error"` |
@@ -105,7 +105,7 @@ Each `gt sendkeys` dispatch to an agent's tmux pane.
 ### `agent.event`
 
 One record per content block in the agent's conversation log.
-Full content, no truncation.
+Only emitted when `GT_LOG_AGENT_OUTPUT=true`.
 
 | Attribute | Type | Description |
 |---|---|---|
@@ -115,10 +115,10 @@ Full content, no truncation.
 | `agent_type` | string | adapter name |
 | `event_type` | string | `"text"` · `"tool_use"` · `"tool_result"` · `"thinking"` |
 | `role` | string | `"assistant"` · `"user"` |
-| `content` | string | full content — LLM text, tool JSON input, tool output |
+| `content` | string | content truncated to 512 bytes (set `GT_LOG_AGENT_CONTENT_LIMIT=0` to disable) |
 
-For `tool_use`: `content = "<tool_name>: <full_json_input>"`
-For `tool_result`: `content = <full tool output>`
+For `tool_use`: `content = "<tool_name>: <truncated_json_input>"`
+For `tool_result`: `content = <truncated tool output>`
 
 ---
 
@@ -168,7 +168,7 @@ All operations on the Gastown mail system.
 | `msg.from` | string | sender address |
 | `msg.to` | string | recipient(s), comma-separated |
 | `msg.subject` | string | subject |
-| `msg.body` | string | full message body — no truncation |
+| `msg.body` | string | message body (opt-in: `GT_LOG_MAIL_BODY=true`; truncated to 256 bytes) |
 | `msg.thread_id` | string | thread ID |
 | `msg.priority` | string | `"high"` · `"normal"` · `"low"` |
 | `msg.type` | string | message type (`"work"`, `"notify"`, `"queue"`, …) |
@@ -287,9 +287,13 @@ event_type, msg.thread_id, msg.from, msg.to
 | `GT_RUN` | tmux session env + subprocess | run UUID; correlation key across all events |
 | `GT_OTEL_LOGS_URL` | daemon startup | OTLP logs endpoint URL |
 | `GT_OTEL_METRICS_URL` | daemon startup | OTLP metrics endpoint URL |
-| `GT_LOG_AGENT_OUTPUT` | operator | opt-in: stream Claude JSONL conversation events |
+| `GT_LOG_AGENT_OUTPUT` | operator | opt-in: stream Claude JSONL conversation events (content truncated to 512 bytes by default) |
+| `GT_LOG_AGENT_CONTENT_LIMIT` | operator | override content truncation in `agent.event`; set `0` to disable (experts only) |
 | `GT_LOG_BD_OUTPUT` | operator | opt-in: include bd stdout/stderr in `bd.call` records |
 | `GT_LOG_PANE_OUTPUT` | operator | opt-in: stream raw tmux pane output |
+| `GT_LOG_MAIL_BODY` | operator | opt-in: include mail body in `mail` records (truncated to 256 bytes) |
+| `GT_LOG_PROMPT_KEYS` | operator | opt-in: include prompt text in `prompt.send` records (truncated to 256 bytes) |
+| `GT_LOG_PRIME_CONTEXT` | operator | opt-in: log full rendered formula in `prime.context` records |
 
 `GT_RUN` is also surfaced as `gt.run_id` in `OTEL_RESOURCE_ATTRIBUTES` for `bd`
 subprocesses, correlating their own telemetry to the parent run.

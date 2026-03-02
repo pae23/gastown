@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,7 @@ type MailMessageInfo struct {
 	From     string // sender address
 	To       string // recipient address(es), comma-separated
 	Subject  string // message subject
-	Body     string // full message body — not truncated
+	Body     string // message body — logged only when GT_LOG_MAIL_BODY=true (truncated to 256 bytes)
 	ThreadID string // thread / conversation ID
 	Priority string // "high", "normal", "low"
 	MsgType  string // message type label (e.g. "work", "notify", "queue")
@@ -329,21 +330,25 @@ func RecordSessionStop(ctx context.Context, sessionID string, err error) {
 }
 
 // RecordPromptSend records a tmux SendKeys prompt dispatch (metrics + log event).
-// keys contains the full prompt text — no truncation.
+// keys content is opt-in: set GT_LOG_PROMPT_KEYS=true to include it (truncated
+// to 256 bytes). Default off because prompts may contain secrets or PII.
 func RecordPromptSend(ctx context.Context, session, keys string, debounceMs int, err error) {
 	initInstruments()
 	status := statusStr(err)
 	inst.promptTotal.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("status", status)),
 	)
-	emit(ctx, "prompt.send", severity(err),
+	kvs := []otellog.KeyValue{
 		otellog.String("session", session),
-		otellog.String("keys", keys),
 		otellog.Int64("keys_len", int64(len(keys))),
 		otellog.Int64("debounce_ms", int64(debounceMs)),
 		otellog.String("status", status),
 		errKV(err),
-	)
+	}
+	if os.Getenv("GT_LOG_PROMPT_KEYS") == "true" {
+		kvs = append(kvs, otellog.String("keys", truncateOutput(keys, 256)))
+	}
+	emit(ctx, "prompt.send", severity(err), kvs...)
 }
 
 // AgentInstantiateInfo carries all fields for the root agent.instantiate event.
@@ -402,9 +407,10 @@ func RecordAgentInstantiate(ctx context.Context, info AgentInstantiateInfo) {
 	)
 }
 
-// RecordMailMessage records a mail send/read/archive operation with the full
-// message content. All MailMessageInfo fields are optional; unknown fields
-// should be left as empty strings. Body is stored in full — no truncation.
+// RecordMailMessage records a mail send/read/archive operation.
+// All MailMessageInfo fields are optional; pass zero values for unknown fields.
+// msg.body is opt-in: set GT_LOG_MAIL_BODY=true to include it (truncated to
+// 256 bytes). Default off because mail bodies may contain secrets or PII.
 func RecordMailMessage(ctx context.Context, operation string, msg MailMessageInfo, err error) {
 	initInstruments()
 	status := statusStr(err)
@@ -414,19 +420,22 @@ func RecordMailMessage(ctx context.Context, operation string, msg MailMessageInf
 			attribute.String("operation", operation),
 		),
 	)
-	emit(ctx, "mail", severity(err),
+	kvs := []otellog.KeyValue{
 		otellog.String("operation", operation),
 		otellog.String("msg.id", msg.ID),
 		otellog.String("msg.from", msg.From),
 		otellog.String("msg.to", msg.To),
 		otellog.String("msg.subject", msg.Subject),
-		otellog.String("msg.body", msg.Body),
 		otellog.String("msg.thread_id", msg.ThreadID),
 		otellog.String("msg.priority", msg.Priority),
 		otellog.String("msg.type", msg.MsgType),
 		otellog.String("status", status),
 		errKV(err),
-	)
+	}
+	if os.Getenv("GT_LOG_MAIL_BODY") == "true" {
+		kvs = append(kvs, otellog.String("msg.body", truncateOutput(msg.Body, 256)))
+	}
+	emit(ctx, "mail", severity(err), kvs...)
 }
 
 // RecordPrime records a gt prime invocation (metrics + log event).
@@ -449,12 +458,11 @@ func RecordPrime(ctx context.Context, role string, hookMode bool, err error) {
 }
 
 // RecordPrimeContext logs the formula/context rendered by gt prime.
-// This lets operators see exactly what context each agent started with,
-// correlated to the Claude API calls that follow. Only emits when telemetry
-// is active (no-op otherwise). The formula may be empty for compact/resume primes
-// or when the fallback (non-template) path is used.
+// Opt-in: set GT_LOG_PRIME_CONTEXT=true to enable. Default off because the
+// rendered formula may contain secrets injected by gt prime (API keys, tokens).
+// Only emits when telemetry is active and the env var is set.
 func RecordPrimeContext(ctx context.Context, formula, role string, hookMode bool) {
-	if formula == "" {
+	if formula == "" || os.Getenv("GT_LOG_PRIME_CONTEXT") != "true" {
 		return
 	}
 	initInstruments()
@@ -752,7 +760,7 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 	)
 }
 
-// RecordAgentEvent emits a structured agent conversation event to VictoriaLogs.
+// RecordAgentEvent emits a structured agent conversation event.
 // Opt-in: only called when GT_LOG_AGENT_OUTPUT=true.
 //
 // agentType is the adapter name ("claudecode", "opencode", …).
@@ -760,7 +768,8 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 // role is "assistant" or "user".
 // nativeSessionID is the agent-native session UUID (e.g. Claude Code JSONL filename UUID).
 // ts is the original timestamp from the conversation log.
-// content is stored in full — no truncation.
+// content is truncated to 512 bytes to limit PII exposure; set
+// GT_LOG_AGENT_CONTENT_LIMIT=0 to disable truncation (experts only).
 func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role, content, nativeSessionID string, ts time.Time) {
 	initInstruments()
 	inst.agentEventTotal.Add(ctx, 1, metric.WithAttributes(
@@ -775,12 +784,20 @@ func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role
 	if !ts.IsZero() {
 		r.SetTimestamp(ts)
 	}
+	// Truncate content to limit PII/secret exposure in telemetry backends.
+	// Default limit is 512 bytes. Set GT_LOG_AGENT_CONTENT_LIMIT=0 to disable.
+	contentLimit := 512
+	if v := os.Getenv("GT_LOG_AGENT_CONTENT_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			contentLimit = n
+		}
+	}
 	r.AddAttributes(
 		otellog.String("session", sessionID),
 		otellog.String("agent_type", agentType),
 		otellog.String("event_type", eventType),
 		otellog.String("role", role),
-		otellog.String("content", content),
+		otellog.String("content", truncateOutput(content, contentLimit)),
 		otellog.String("native_session_id", nativeSessionID),
 	)
 	addRunID(ctx, &r)

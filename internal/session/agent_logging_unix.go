@@ -81,6 +81,14 @@ func ActivateAgentLogging(sessionID, workDir, runID string) error {
 	return nil
 }
 
+// DeactivateAgentLogging kills the detached agent-log watcher for sessionID,
+// if one is running. It is the counterpart to ActivateAgentLogging and must be
+// called from every session teardown path to avoid orphan processes.
+// Safe to call even when no watcher is running (no-op in that case).
+func DeactivateAgentLogging(sessionID string) {
+	killPreviousAgentLogger(agentLogPIDFile(sessionID))
+}
+
 // agentLogPIDFile returns the PID file path for a session's agent-log watcher.
 func agentLogPIDFile(sessionID string) string {
 	// Sanitize sessionID for use in a filename (replace / with -).

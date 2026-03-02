@@ -338,6 +338,10 @@ func StopSession(t *tmux.Tmux, sessionID string, graceful bool) error {
 		WaitForSessionExit(t, sessionID, constants.GracefulShutdownTimeout)
 	}
 
+	// Kill any detached agent-log watcher for this session before tearing down
+	// the tmux session, to avoid orphan processes accumulating over time.
+	DeactivateAgentLogging(sessionID)
+
 	if err := t.KillSessionWithProcesses(sessionID); err != nil {
 		return fmt.Errorf("killing session: %w", err)
 	}
