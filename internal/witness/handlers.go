@@ -1024,7 +1024,7 @@ func detectZombieLiveSession(workDir, rigName, polecatName, agentBeadID, session
 	// Check for done-intent stuck too long (polecat hung in gt done).
 	// gt-dsgp: Restart instead of nuke — the session is stuck trying to exit,
 	// a fresh start will let it retry or pick up its hook cleanly.
-	if doneIntent != nil && time.Since(doneIntent.Timestamp) > 60*time.Second {
+	if doneIntent != nil && time.Since(doneIntent.Timestamp) > DoneIntentGracePeriod {
 		stuckAgentState, stuckHookBead := getAgentBeadState(workDir, agentBeadID)
 		zombie := ZombieResult{
 			PolecatName:    polecatName,
@@ -1092,7 +1092,7 @@ func detectZombieDeadSession(workDir, rigName, polecatName, agentBeadID, session
 	// Done-intent: polecat was trying to exit.
 	if doneIntent != nil {
 		age := time.Since(doneIntent.Timestamp)
-		if age < 30*time.Second {
+		if age < DoneIntentGracePeriod {
 			return ZombieResult{}, false // Recent — still working through gt done
 		}
 		diAgentState, diHookBead := getAgentBeadState(workDir, agentBeadID)
@@ -1214,6 +1214,12 @@ func handleZombieRestart(workDir, rigName, polecatName, hookBead, cleanupStatus 
 		}
 	}
 }
+
+// DoneIntentGracePeriod is how long to wait after a done-intent is set before
+// treating the polecat as a zombie. Used for both live sessions (stuck in gt done)
+// and dead sessions (died during gt done). A single constant prevents threshold
+// drift between the two detection paths (gt-y230).
+const DoneIntentGracePeriod = 60 * time.Second
 
 // StartupStallThreshold is the minimum session age before a session with no
 // recent tmux activity is considered stalled at startup. Sessions younger than

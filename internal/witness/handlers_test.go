@@ -530,7 +530,7 @@ func TestDetectZombie_DoneIntentDeadSession(t *testing.T) {
 	age := time.Since(doneIntent.Timestamp)
 
 	// Dead session + old intent → restart path (gt-dsgp: was auto-nuke)
-	shouldRestart := !sessionAlive && doneIntent != nil && age >= 30*time.Second
+	shouldRestart := !sessionAlive && doneIntent != nil && age >= DoneIntentGracePeriod
 	if !shouldRestart {
 		t.Errorf("expected restart for dead session + old done-intent (age=%v)", age)
 	}
@@ -548,7 +548,7 @@ func TestDetectZombie_DoneIntentLiveStuck(t *testing.T) {
 	age := time.Since(doneIntent.Timestamp)
 
 	// Live session + old intent → restart stuck session (gt-dsgp: was kill)
-	shouldRestart := sessionAlive && doneIntent != nil && age > 60*time.Second
+	shouldRestart := sessionAlive && doneIntent != nil && age > DoneIntentGracePeriod
 	if !shouldRestart {
 		t.Errorf("expected restart for live session + old done-intent (age=%v)", age)
 	}
@@ -556,7 +556,7 @@ func TestDetectZombie_DoneIntentLiveStuck(t *testing.T) {
 
 func TestDetectZombie_DoneIntentRecent(t *testing.T) {
 	t.Parallel()
-	// Verify the logic: done-intent younger than 30s → skip (polecat still working)
+	// Verify the logic: done-intent younger than DoneIntentGracePeriod → skip (polecat still working)
 	doneIntent := &DoneIntent{
 		ExitType:  "COMPLETED",
 		Timestamp: time.Now().Add(-10 * time.Second), // 10s old
@@ -565,14 +565,14 @@ func TestDetectZombie_DoneIntentRecent(t *testing.T) {
 	age := time.Since(doneIntent.Timestamp)
 
 	// Recent intent → should skip
-	shouldSkip := !sessionAlive && doneIntent != nil && age < 30*time.Second
+	shouldSkip := !sessionAlive && doneIntent != nil && age < DoneIntentGracePeriod
 	if !shouldSkip {
 		t.Errorf("expected skip for recent done-intent (age=%v)", age)
 	}
 
 	// Live session + recent intent → also skip
 	sessionAlive = true
-	shouldSkipLive := sessionAlive && doneIntent != nil && age <= 60*time.Second
+	shouldSkipLive := sessionAlive && doneIntent != nil && age <= DoneIntentGracePeriod
 	if !shouldSkipLive {
 		t.Errorf("expected skip for live session + recent done-intent (age=%v)", age)
 	}
@@ -716,7 +716,7 @@ func TestDetectZombie_BeadClosedVsDoneIntent(t *testing.T) {
 
 	// Done-intent exists + bead closed → done-intent check runs first,
 	// closed-bead check should NOT run (it's in the else branch)
-	doneIntentHandled := sessionAlive && doneIntent != nil && time.Since(doneIntent.Timestamp) > 60*time.Second
+	doneIntentHandled := sessionAlive && doneIntent != nil && time.Since(doneIntent.Timestamp) > DoneIntentGracePeriod
 	closedBeadCheck := sessionAlive && agentAlive && doneIntent == nil &&
 		hookBead != "" && beadStatus == "closed"
 
