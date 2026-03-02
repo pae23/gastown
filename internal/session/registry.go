@@ -119,11 +119,20 @@ func SetDefaultRegistry(r *PrefixRegistry) {
 func InitRegistry(townRoot string) error {
 	var errs []error
 
-	// Use a per-town tmux socket derived from the town name (e.g. "gt-test").
-	// This gives each Gas Town instance its own tmux server, so session names
-	// like "mayor" and "deacon" no longer conflict across towns running on the
-	// same machine. Users attach with: tmux -L <town-name> attach
-	tmux.SetDefaultSocket(sanitizeTownName(filepath.Base(townRoot)))
+	// Determine the tmux socket name from GT_TMUX_SOCKET env var:
+	//   unset / "default" → shared "default" socket (backward-compatible)
+	//   "auto"            → per-town socket derived from town dir name
+	//                       (required when running multiple towns on one machine,
+	//                       since session names like "mayor" would collide)
+	//   any other value   → use that name as-is
+	socket := os.Getenv("GT_TMUX_SOCKET")
+	switch socket {
+	case "", "default":
+		socket = "default"
+	case "auto":
+		socket = sanitizeTownName(filepath.Base(townRoot))
+	}
+	tmux.SetDefaultSocket(socket)
 
 	r, err := BuildPrefixRegistryFromTown(townRoot)
 	if err != nil {
