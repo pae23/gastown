@@ -1077,8 +1077,11 @@ func Start(townRoot string) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 
-	// Detach from terminal
+	// Detach from terminal and put dolt in its own process group so that
+	// signals sent to the parent process group (e.g. SIGHUP when the caller
+	// calls syscall.Exec to become tmux) don't reach the dolt server.
 	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		if closeErr := logFile.Close(); closeErr != nil {
