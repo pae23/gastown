@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
@@ -322,8 +321,7 @@ func ensureMayorInfra(townRoot string) error {
 						}
 					}
 					if freePort := doltserver.FindFreePort(doltCfg.Port + 1); freePort > 0 {
-						origArgs := strings.Join(os.Args[1:], " ")
-						msg += fmt.Sprintf("\n\nRetry with a free port:\n  GT_DOLT_PORT=%d gt %s", freePort, origArgs)
+						msg += fmt.Sprintf("\n\nConfigure a free port for this town, then retry:\n  gt config set dolt.port %d && gt mayor at", freePort)
 					}
 					return fmt.Errorf("%s", msg)
 				}
