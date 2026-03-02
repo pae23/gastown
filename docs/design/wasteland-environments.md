@@ -1,6 +1,6 @@
-# Wasteland Environments
+# Wasteland Environments — Capability Matchmaking
 
-> Spec for environment-aware beads and molecule steps across the Gas Town Wasteland.
+> Spec for capability-aware routing of beads and molecule steps across the Gas Town Wasteland.
 
 **Status**: Draft
 **Related**: [federation.md](federation.md) | [model-aware-molecules.md](model-aware-molecules.md) | [agent-provider-interface.md](agent-provider-interface.md)
@@ -10,15 +10,19 @@
 
 ## 1. Problem and Scope
 
-A molecule step already declares *which model* it wants to run on. This design extends that principle to *which environment* it runs in: what tools are available, what network policy applies, which secrets are visible.
+A molecule step already declares *which model* it wants to run on. This design extends that principle to *which environment* it runs in — and introduces **capability matchmaking** as the mechanism by which the Wasteland connects beads that declare requirements with towns that satisfy them.
+
+The Wasteland is not just a work queue: it is a marketplace where capability supply (town profiles) meets capability demand (bead and step constraints). A bead that needs a GPU, a data lake, or a HIPAA-compliant sandbox is routed to the right town automatically, without the poster knowing which town that is.
 
 **Key terminology**:
 - **Town** — a Gas Town instance. A single `gt` daemon process runs per town. Multiple towns can coexist on the same machine, each sovereign with its own configuration and environment. Rigs live as subdirectories inside the town.
 - **Rig** — a git repository (subdirectory) managed by the town daemon. All rigs in a town share the same environment; capabilities are a town-level concern.
-- **Bead** — a work item managed by `bd`. A bead can carry environment requirements that express what the work needs to execute, independently of any molecule formula.
+- **Bead** — a work item managed by `bd`. A bead can carry capability requirements that express what the work needs to execute, independently of any molecule formula.
 - **Wasteland** — a federation of towns, coordinated via the shared `wl-commons` DoltHub database.
+- **Capability manifest** — a town's public advertisement of what it can provide: compute (GPU, RAM, storage), data access (lakes, databases), network policy, security posture, and agent availability.
+- **Matchmaking** — the process of finding the town whose capability manifest best satisfies a bead or step's requirements.
 
-Environment routing operates at **two levels**:
+Capability routing operates at **two levels**:
 
 | Level | When | Semantics |
 |---|---|---|
@@ -40,7 +44,9 @@ Environment capabilities are declared at the **town** level (`~/.gt/envs.toml`) 
 
 ## 2. Core Concept: Environment Profile
 
-An `EnvProfile` is a declaration of what a town can provide to execute a bead or step. It is defined locally by the town and optionally advertised to Wasteland peers.
+An `EnvProfile` is a declaration of what a town can provide to execute a bead or step. It is defined locally by the town and optionally advertised to Wasteland peers as part of the town's **capability manifest**.
+
+Profiles cover five capability dimensions: **tools**, **network**, **compute**, **data**, and **security**. A bead or step declares requirements in any subset of these dimensions; the matchmaker finds the town whose profile satisfies all of them.
 
 ```toml
 # ~/.gt/envs.toml  (declared by each town instance)
@@ -49,28 +55,55 @@ An `EnvProfile` is a declaration of what a town can provide to execute a bead or
 description = "Python 3.12 with no network access"
 tools       = ["git", "python3.12", "uv", "make"]
 network     = "isolated"
-secrets     = []                      # nothing injected by default
+secrets     = []
 tags        = ["python", "isolated"]
-agent       = "claude"                # agent preset running in this environment
-shared      = true                    # visible to Wasteland peers
-
-[envs.node-web]
-description = "Node.js with access to npm registry and GitHub"
-tools       = ["git", "node22", "npm", "pnpm"]
-network     = "restricted:registry.npmjs.org,github.com"
-secrets     = ["GITHUB_TOKEN"]
-tags        = ["node", "web"]
 agent       = "claude"
 shared      = true
 
-[envs.secure-sandbox]
-description = "Empty environment, no network, no secrets"
-tools       = ["git"]
+[envs.gpu-training]
+description  = "NVIDIA A100 node for ML fine-tuning"
+tools        = ["git", "python3.12", "cuda12", "torch", "huggingface-cli"]
+network      = "restricted:huggingface.co,files.pythonhosted.org"
+secrets      = ["HF_TOKEN"]
+tags         = ["gpu", "ml", "training"]
+agent        = "claude"
+shared       = true
+
+[compute]
+gpu          = "nvidia-a100"
+gpu_memory   = "40GB"
+cpu_cores    = 32
+ram          = "128GB"
+storage      = "2TB"
+storage_type = "nvme"
+
+[envs.datalake-analyst]
+description = "Read-only access to S3 data lake + Athena"
+tools       = ["git", "python3.12", "aws-cli", "dbt"]
+network     = "restricted:s3.amazonaws.com,athena.us-east-1.amazonaws.com"
+secrets     = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+tags        = ["data", "analytics", "s3"]
+agent       = "claude"
+shared      = true
+
+[data]
+lakes        = ["s3://corp-datalake/"]
+databases    = ["athena:corp-warehouse"]
+access       = "read-only"
+
+[envs.hipaa-sandbox]
+description = "HIPAA-compliant isolated sandbox for health data"
+tools       = ["git", "python3.12"]
 network     = "isolated"
 secrets     = []
-tags        = ["sandbox", "untrusted"]
-agent       = "gemini"                # any agent that supports non-interactive mode
+tags        = ["hipaa", "healthcare", "isolated"]
+agent       = "gemini"
 shared      = true
+
+[security]
+compliance   = ["hipaa"]
+clearance    = "internal"
+audit_log    = true
 
 [envs.full]
 description = "Standard town environment (default)"
@@ -79,23 +112,74 @@ network     = "full"
 secrets     = ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"]
 tags        = ["default"]
 agent       = "claude"
-shared      = false                   # internal only (default)
+shared      = false                   # internal only, never advertised
 ```
 
 ### Profile Fields
+
+**Core fields** (apply to every profile):
 
 | Field | Type | Description |
 |---|---|---|
 | `description` | string | Human-readable label |
 | `tools` | []string | Available executables. Empty = no constraint |
-| `network` | string | `"isolated"` · `"full"` · `"restricted:<allowlist>"` |
-| `secrets` | []string | Names of env vars injected into the step |
+| `network` | string | `"isolated"` · `"full"` · `"restricted:<host1>,<host2>"` |
+| `secrets` | []string | Env var names injected into the execution environment. Never advertised to Wasteland |
 | `tags` | []string | Free-form labels used for capability matching |
-| `agent` | string | Agent preset name (`"claude"`, `"gemini"`, `"codex"`, …). Empty = any available agent |
-| `resources` | table | Optional: cpu, memory, timeout |
+| `agent` | string | Agent preset (`"claude"`, `"gemini"`, `"codex"`, …). Empty = any available |
 | `shared` | bool | Whether this profile is advertised to Wasteland peers (default: false) |
 
-The `agent` field maps to an entry in `builtinPresets` (`internal/config/agents.go`). It determines which CLI binary is launched, how readiness is detected, and which capabilities (hooks, non-interactive mode, session resume) are available. See [agent-provider-interface.md](agent-provider-interface.md) for the full capability matrix.
+**`[compute]` sub-table** (optional):
+
+| Field | Type | Description |
+|---|---|---|
+| `gpu` | string | GPU model (e.g. `"nvidia-a100"`, `"nvidia-l4"`) or `"any"` |
+| `gpu_memory` | string | Minimum GPU VRAM (e.g. `"40GB"`) |
+| `cpu_cores` | int | Minimum CPU core count |
+| `ram` | string | Minimum RAM (e.g. `"64GB"`) |
+| `storage` | string | Minimum disk space (e.g. `"1TB"`) |
+| `storage_type` | string | `"ssd"` · `"nvme"` · `"hdd"` |
+
+**`[data]` sub-table** (optional):
+
+| Field | Type | Description |
+|---|---|---|
+| `lakes` | []string | Accessible data lake URIs (S3, GCS, ADLS) |
+| `databases` | []string | Accessible databases (`"athena:db"`, `"bigquery:project"`, `"pg:host/db"`) |
+| `access` | string | `"read-only"` · `"read-write"` |
+
+**`[security]` sub-table** (optional):
+
+| Field | Type | Description |
+|---|---|---|
+| `compliance` | []string | Compliance frameworks enforced (`"hipaa"`, `"soc2"`, `"gdpr"`, `"pci-dss"`) |
+| `clearance` | string | Minimum data clearance level (`"public"`, `"internal"`, `"confidential"`, `"secret"`) |
+| `audit_log` | bool | Whether all agent actions are audit-logged |
+
+The `agent` field maps to an entry in `builtinPresets` (`internal/config/agents.go`). See [agent-provider-interface.md](agent-provider-interface.md) for the full capability matrix.
+
+### Sandbox Backend (optional)
+
+A profile can declare a `sandbox_type` to specify the enforcement mechanism for its isolation constraints. When present, the town uses the named backend to create and manage the execution container:
+
+```toml
+[envs.secure-sandbox]
+tools        = ["git"]
+network      = "isolated"
+tags         = ["sandbox", "untrusted"]
+agent        = "gemini"
+shared       = true
+sandbox_type = "opensandbox"          # enforcement backend
+sandbox_image = "ubuntu:24.04"        # base image
+
+[security]
+compliance   = ["soc2"]
+audit_log    = true
+```
+
+**[OpenSandbox](https://github.com/alibaba/OpenSandbox)** (Alibaba) is the reference backend. It provides a general-purpose sandbox platform for AI agents with Docker/Kubernetes runtimes, per-sandbox egress network controls, and native support for Claude Code, Gemini CLI, and Codex as coding agents. Its lifecycle server exposes a language-agnostic API that `gt` calls to create a sandbox, deliver the step inside it, and tear it down on completion. This is the enforcement layer that turns a profile's declarative constraints (`network = "isolated"`, compliance tags) into actual OS-level guarantees via Linux namespaces and container isolation.
+
+Profiles without `sandbox_type` rely on the town's native environment (bare metal, existing VM, `nix-shell`, etc.) — the town certifies compliance by reputation, not by technical enforcement.
 
 ---
 
@@ -213,15 +297,49 @@ ALTER TABLE rigs ADD COLUMN env_profiles JSON;
       "tools": ["git", "python3.12", "uv"],
       "network": "isolated",
       "agent": "claude",
-      "agent_caps": ["non_interactive", "hooks", "resume"]
+      "agent_caps": ["non_interactive", "hooks", "resume"],
+      "sandbox_type": "opensandbox"
     },
     {
-      "name": "secure-sandbox",
-      "tags": ["sandbox"],
-      "tools": ["git"],
+      "name": "gpu-training",
+      "tags": ["gpu", "ml", "training"],
+      "tools": ["git", "python3.12", "cuda12", "torch"],
+      "network": "restricted:huggingface.co",
+      "agent": "claude",
+      "agent_caps": ["non_interactive", "hooks", "resume"],
+      "compute": {
+        "gpu": "nvidia-a100",
+        "gpu_memory": "40GB",
+        "cpu_cores": 32,
+        "ram": "128GB"
+      }
+    },
+    {
+      "name": "datalake-analyst",
+      "tags": ["data", "analytics", "s3"],
+      "tools": ["git", "python3.12", "aws-cli", "dbt"],
+      "network": "restricted:s3.amazonaws.com,athena.us-east-1.amazonaws.com",
+      "agent": "claude",
+      "agent_caps": ["non_interactive", "hooks", "resume"],
+      "data": {
+        "lakes": ["s3://corp-datalake/"],
+        "databases": ["athena:corp-warehouse"],
+        "access": "read-only"
+      }
+    },
+    {
+      "name": "hipaa-sandbox",
+      "tags": ["hipaa", "healthcare", "isolated"],
+      "tools": ["git", "python3.12"],
       "network": "isolated",
       "agent": "gemini",
-      "agent_caps": ["non_interactive", "resume"]
+      "agent_caps": ["non_interactive", "resume"],
+      "security": {
+        "compliance": ["hipaa"],
+        "clearance": "confidential",
+        "audit_log": true
+      },
+      "sandbox_type": "opensandbox"
     }
   ]
 }
@@ -250,7 +368,62 @@ gt wl caps <town-handle>
 
 ---
 
-## 6. Wasteland Routing
+## 6. Capability Matchmaking
+
+Matchmaking is the process of selecting the best town for a bead or step. It runs locally, against the `env_profiles` manifests cached in `wl-commons.rigs`, before any Wasteland item is posted.
+
+### Matching Rules
+
+A town profile **satisfies** a requirement if all of the following hold:
+
+| Requirement field | Satisfied when |
+|---|---|
+| `env = "name"` | Profile `name` equals the declared profile name |
+| `env_tools = [...]` | Every listed tool is present in `profile.tools` (or `profile.tools` is empty) |
+| `env_network` | Profile `network` is equal to or stricter than the requirement |
+| `env_tags = [...]` | Every listed tag is present in `profile.tags` |
+| `env_agent` | Profile `agent` equals the declared agent (or requirement is empty) |
+| `compute.gpu` | Profile advertises the requested GPU model, or `"any"` |
+| `compute.gpu_memory` | Profile `gpu_memory` ≥ required value |
+| `compute.cpu_cores` | Profile `cpu_cores` ≥ required value |
+| `compute.ram` | Profile `ram` ≥ required value |
+| `data.lakes` | Every required lake URI prefix appears in `profile.data.lakes` |
+| `data.databases` | Every required database appears in `profile.data.databases` |
+| `security.compliance` | Every required compliance tag appears in `profile.security.compliance` |
+| `security.clearance` | Profile `clearance` ≥ required clearance level |
+
+Network strictness order: `isolated` > `restricted` > `full`. A bead requiring `isolated` will not match a `full` profile.
+
+Clearance level order: `secret` > `confidential` > `internal` > `public`.
+
+### Scoring
+
+When multiple towns satisfy the same requirements, they are ranked by:
+
+```
+score = trust_level × 40
+      + recency(last_seen) × 30     # decays to 0 over 7 days of silence
+      + profile_fit × 20            # exact name match > superset match
+      - queue_depth × 10            # self-reported; omitted = 0 assumed
+```
+
+The highest-scoring town is selected. Ties are broken by `last_seen` (most recent wins).
+
+### Partial matches
+
+A town profile that satisfies *some but not all* requirements is not a match. There is no partial routing. If no single town satisfies all requirements, the bead or step is blocked with an error listing the unsatisfied dimensions — e.g.:
+
+```
+no town satisfies: compute.gpu=nvidia-a100, security.compliance=[hipaa]
+  town-alice: missing compute.gpu
+  town-bob:   missing security.compliance
+```
+
+This fail-fast behaviour prevents silent capability degradation.
+
+---
+
+## 7. Wasteland Routing
 
 Routing happens in three passes. No new protocol is introduced — everything is built on existing Wasteland primitives (`gt wl post / claim / done / sync`).
 
@@ -328,7 +501,7 @@ The delegated step carries a `delegated_to` attribute with the target town's `ho
 
 ---
 
-## 7. Agent Execution on Remote Towns
+## 8. Agent Execution on Remote Towns
 
 When a bead or step is delegated, the remote town executes it using its local `AgentPresetInfo` machinery — the same infrastructure used for all local agent orchestration. There is no special Wasteland execution path.
 
@@ -369,7 +542,7 @@ Every capability has a fallback, so the remote town never hard-blocks on a missi
 
 ---
 
-## 8. Security Model
+## 9. Security Model
 
 **Principle**: the remote town is sovereign over its environment. The local town cannot inspect, modify, or bypass the constraints of a remote profile.
 
@@ -395,7 +568,7 @@ shared = false    # internal only (default)
 
 ---
 
-## 9. Schema Extensions
+## 10. Schema Extensions
 
 ### 9a. Bead fields (`bd`)
 
@@ -452,29 +625,33 @@ SandboxMinTier  string  // maps to sandbox_min_tier column (already in SQL)
 
 ---
 
-## 10. Multi-Town Example
+## 11. Multi-Town Example
+
+### Example A — Isolated test pipeline
 
 ```toml
 formula = "mol-secure-pipeline"
 version = 1
 
-# Step 1: code analysis — runs anywhere (inherits bead env or local "full")
+# Step 1: code analysis — runs anywhere
 [[steps]]
 id    = "analyze"
 title = "Analyze codebase"
 model = "claude-sonnet-4-5"
 
 # Step 2: tests in an isolated sandbox
-# → delegated to a Wasteland peer town if unavailable locally
+# → matchmaker delegates to a Wasteland peer town if unavailable locally
 [[steps]]
-id      = "test"
-title   = "Run tests in isolation"
-needs   = ["analyze"]
-env     = "python-isolated"
-model   = "auto"
-min_swe = 50
+id          = "test"
+title       = "Run tests in isolation"
+needs       = ["analyze"]
+env_tools   = ["python3", "make"]
+env_network = "isolated"
+env_tags    = ["python"]
+model       = "auto"
+min_swe     = 50
 
-# Step 3: synthesis — back on the local (or bead-routed) town
+# Step 3: synthesis — runs on the local (or bead-routed) town
 [[steps]]
 id    = "report"
 title = "Synthesize results"
@@ -482,38 +659,69 @@ needs = ["test"]
 model = "claude-sonnet-4-5"
 ```
 
-Bead with a pre-declared environment requirement that routes the whole item upfront:
+### Example B — GPU fine-tuning + datalake bead
+
+Bead that routes the entire work item upfront to a town with GPU and S3 access:
 
 ```
-# posted via gt wl post or gt sling
-bead gt-abc123:
-  title       = "Fix the Python parser regression"
-  env         = "python-isolated"
+bead gt-def456:
+  title       = "Fine-tune classifier on Q1 dataset"
+  env_tags    = ["gpu", "ml"]
+  env_network = "restricted:s3.amazonaws.com,huggingface.co"
+
+  [compute]
+  gpu        = "any"
+  gpu_memory = "16GB"
+
+  [data]
+  lakes = ["s3://corp-datalake/datasets/q1/"]
+```
+
+Matchmaking + routing flow:
+```
+1. Local town: no GPU profile → no match
+2. Matchmaker queries wl-commons.rigs env_profiles
+   → town-alice: gpu-training profile (A100, 40GB, S3 access) → score 87
+   → town-bob:   gpu-training profile (L4, 24GB, S3 access)   → score 74
+3. town-alice selected (higher score)
+4. gt wl post → sandbox_required=1, sandbox_scope={"env_tags":["gpu","ml"],...}
+5. town-alice gt wl claim
+6. town-alice executes full bead in gpu-training environment
+7. gt wl done --evidence <bead-uri> → local town marks bead complete
+```
+
+### Example C — HIPAA-compliant data bead
+
+```
+bead gt-ghi789:
+  title = "Analyze patient outcome data"
+  env_tags = ["hipaa", "healthcare"]
   env_network = "isolated"
+
+  [security]
+  compliance = ["hipaa"]
+  clearance  = "confidential"
 ```
 
-Routing flow:
-```
-1. Local town has no "python-isolated" profile
-2. gt wl post → sandbox_required=1, sandbox_scope={"env":"python-isolated","bead_id":"gt-abc123"}
-3. Remote town (python-isolated available) → gt wl claim
-4. Remote town executes full bead + molecule in python-isolated environment
-5. gt wl done --evidence <bead-uri> → local town marks bead complete
-```
+Matchmaking rejects towns without `security.compliance = ["hipaa"]` regardless of all other capabilities. The compliance requirement is a hard filter, not a scoring dimension.
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
 | Question | Discussion |
 |---|---|
-| **`target_town` for step delegation** | Bead-level routing is open (any matching town can claim — env IS the filter). Step delegation within a running molecule needs to reach a specific town. Options: `target_town VARCHAR(255)` in `wanted`, or encode it in `sandbox_scope.target`. |
+| **Scoring weights** | The scoring formula (trust×40, recency×30, fit×20, queue×10) is a first guess. Should weights be configurable per town, or learned from historical completion quality? |
+| **Queue depth self-reporting** | Scoring penalises busy towns, but towns self-report their queue depth. A dishonest or misconfigured town can game the score. Should queue depth be omitted from the formula, or cross-validated via `last_seen` activity? |
+| **Partial capability matching** | Currently fail-fast: all requirements must be satisfied. Should the matchmaker allow "best-effort" matching (ignoring optional requirements flagged with `required = false`)? |
+| **`target_town` for step delegation** | Bead-level routing is open (any matching town can claim — env IS the filter). Step delegation within a running molecule has already selected a specific target via matchmaking. Options: `target_town VARCHAR(255)` in `wanted`, or encode it in `sandbox_scope.target`. |
 | **`type = "mol-step"` enum** | Not yet in `wanted.type` enum (current values: feature, bug, design, rfc, docs, research, community, inference). Add `"mol-step"` or reuse `"inference"`? |
 | **Structured results** | `wl done --evidence` currently takes a free-form URL/string. For molecule steps and beads, the result is a bead URI. Should `completions.evidence` be structured JSON (`bead_uri`, `model_id`, `token_counts`)? |
-| **Bead env vs step env conflict** | A step declaring `env = "gpu-farm"` inside a bead already routed to a `python-isolated` town is a mismatch. Validate at `wl post` time (step envs must be satisfiable on any town that satisfies the bead env) or at execution time? |
-| **Profile versioning** | `env_profiles` in the `rigs` row is updated on each `gt wl sync`. Peer towns read stale manifests until their next sync. Is eventual consistency sufficient? |
+| **Bead env vs step env conflict** | A step declaring `env_tags = ["gpu"]` inside a bead already routed to a `python-isolated` town is a mismatch. Validate at `wl post` time, or at execution time? |
+| **Profile versioning** | `env_profiles` in the `rigs` row is updated on each `gt wl sync`. Peer towns read stale manifests until their next sync. Is eventual consistency sufficient, or does compute/data routing need fresher capability data? |
 | **Transitive delegation** | Town A delegates to Town B which delegates to Town C — should chained delegation be allowed? The `parent_completion_id` column in `completions` hints at this, but the lifecycle isn't defined. |
-| **Town selection tiebreaking** | When multiple towns satisfy the same constraints, tiebreak by `trust_level` + `last_seen`. Should towns self-report queue depth? |
+| **OpenSandbox on macOS** | OpenSandbox is Docker/Kubernetes-based (Linux containers). Towns running on macOS need Docker Desktop. Document as a requirement for profiles with `sandbox_type = "opensandbox"`, or find a macOS-native alternative. |
+| **Compliance certification** | `security.compliance = ["hipaa"]` is a self-certification. Nothing prevents a town from lying. Should compliance-tagged profiles require an out-of-band attestation (signed document, badge in `wl-commons.badges`)? |
 | **Agent version pinning** | Should a bead or step require a minimum agent version (e.g. `claude >= 1.2`)? `gt_version` is in `rigs` but refers to the Gas Town binary, not the agent. |
 | **Model↔agent mismatch** | If a step declares `model = "claude-opus-4-6"` but the matched town's profile has `agent = "gemini"`, the router should reject. Validated at `wl post` or at claim time? |
-| **Hook portability** | Claude hooks (`settings.json`) and OpenCode hooks (plugin JS) are agent-specific. If a step depends on a `session_start` hook for context injection, does that constraint propagate to the capability manifest? |
+| **Hook portability** | Claude hooks (`settings.json`) and OpenCode hooks (plugin JS) are agent-specific. If a step depends on a `session_start` hook, does that constraint propagate to the capability manifest? |
