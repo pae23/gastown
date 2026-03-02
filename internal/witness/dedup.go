@@ -11,19 +11,14 @@ import "sync"
 type MessageDeduplicator struct {
 	mu        sync.Mutex
 	processed map[string]bool
-	maxSize   int
 }
 
-// NewMessageDeduplicator creates a deduplicator with the given capacity hint.
-// The map may grow beyond this size — 10k string keys is negligible memory,
+// NewMessageDeduplicator creates a deduplicator.
+// The map grows without bound — 10k string keys is negligible memory,
 // and correctness (no duplicate processing) matters more than a soft cap.
-func NewMessageDeduplicator(maxSize int) *MessageDeduplicator {
-	if maxSize <= 0 {
-		maxSize = 10000
-	}
+func NewMessageDeduplicator() *MessageDeduplicator {
 	return &MessageDeduplicator{
 		processed: make(map[string]bool),
-		maxSize:   maxSize,
 	}
 }
 
