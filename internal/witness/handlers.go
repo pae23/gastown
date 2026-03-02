@@ -216,15 +216,10 @@ func handlePolecatDonePendingMR(workDir, rigName string, payload *PolecatDonePay
 
 	if err := UpdateCleanupWispState(workDir, wispID, "merge-requested"); err != nil {
 		result.Error = fmt.Errorf("updating wisp state: %w", err)
+		return result
 	}
 
-	// notifyRefineryMergeReady may set result.Error; only overwrite if no
-	// prior error was recorded, so the first failure is preserved.
-	prevErr := result.Error
 	notifyRefineryMergeReady(workDir, rigName, result)
-	if prevErr != nil && result.Error != prevErr {
-		result.Error = fmt.Errorf("%w; also: %v", prevErr, result.Error)
-	}
 
 	result.Handled = true
 	result.WispCreated = wispID
