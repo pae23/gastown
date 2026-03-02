@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
@@ -311,7 +312,20 @@ func ensureMayorInfra(townRoot string) error {
 			if !doltRunning {
 				style.PrintWarning("Dolt server is not running, starting...")
 				if err := doltserver.Start(townRoot); err != nil {
-					return fmt.Errorf("Dolt server start failed: %w", err)
+					// Enrich port-conflict errors with a concrete free-port suggestion.
+					msg := fmt.Sprintf("Dolt server start failed: %v", err)
+					if pid, dataDir := doltserver.PortHolder(doltCfg.Port); pid > 0 {
+						if dataDir != "" {
+							msg += fmt.Sprintf("\n  port %d held by dolt PID %d serving %s", doltCfg.Port, pid, dataDir)
+						} else {
+							msg += fmt.Sprintf("\n  port %d held by PID %d", doltCfg.Port, pid)
+						}
+					}
+					if freePort := doltserver.FindFreePort(doltCfg.Port + 1); freePort > 0 {
+						origArgs := strings.Join(os.Args[1:], " ")
+						msg += fmt.Sprintf("\n\nRetry with a free port:\n  GT_DOLT_PORT=%d gt %s", freePort, origArgs)
+					}
+					return fmt.Errorf("%s", msg)
 				}
 				fmt.Printf("  %s Dolt server started (port %d)\n", style.Bold.Render("✓"), doltCfg.Port)
 			}
