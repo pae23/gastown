@@ -75,7 +75,7 @@ func verifyFormulaExists(formulaName string) error {
 
 // runSlingFormula handles standalone formula slinging.
 // Flow: cook → wisp → attach to hook → nudge
-func runSlingFormula(args []string) error {
+func runSlingFormula(ctx context.Context, args []string) error {
 	formulaName := args[0]
 
 	// Get town root early - needed for BEADS_DIR when running bd commands
@@ -141,11 +141,11 @@ func runSlingFormula(args []string) error {
 		Dir(formulaWorkDir).
 		WithGTRoot(townRoot).
 		Run(); err != nil {
-		telemetry.RecordMolCook(context.Background(), formulaName, err)
+		telemetry.RecordMolCook(ctx, formulaName, err)
 		rollbackSpawned("")
 		return fmt.Errorf("cooking formula: %w", err)
 	}
-	telemetry.RecordMolCook(context.Background(), formulaName, nil)
+	telemetry.RecordMolCook(ctx, formulaName, nil)
 
 	// Step 2: Create wisp instance (ephemeral)
 	fmt.Printf("  Creating wisp...\n")
@@ -168,11 +168,11 @@ func runSlingFormula(args []string) error {
 	// Parse wisp output to get the root ID
 	wispRootID, err := parseWispIDFromJSON(wispOut)
 	if err != nil {
-		telemetry.RecordMolWisp(context.Background(), formulaName, "", "", err)
+		telemetry.RecordMolWisp(ctx, formulaName, "", "", err)
 		rollbackSpawned("")
 		return fmt.Errorf("parsing wisp output: %w", err)
 	}
-	telemetry.RecordMolWisp(context.Background(), formulaName, wispRootID, "", nil)
+	telemetry.RecordMolWisp(ctx, formulaName, wispRootID, "", nil)
 
 	fmt.Printf("%s Wisp created: %s\n", style.Bold.Render("✓"), wispRootID)
 

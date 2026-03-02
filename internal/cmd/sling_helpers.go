@@ -717,8 +717,8 @@ type FormulaOnBeadResult struct {
 //   - extraVars: additional --var values supplied by the user
 //
 // Returns the wisp root ID which should be hooked.
-func InstantiateFormulaOnBead(formulaName, beadID, title, hookWorkDir, townRoot string, skipCook bool, extraVars []string) (_ *FormulaOnBeadResult, retErr error) {
-	defer func() { telemetry.RecordFormulaInstantiate(context.Background(), formulaName, beadID, retErr) }()
+func InstantiateFormulaOnBead(ctx context.Context, formulaName, beadID, title, hookWorkDir, townRoot string, skipCook bool, extraVars []string) (_ *FormulaOnBeadResult, retErr error) {
+	defer func() { telemetry.RecordFormulaInstantiate(ctx, formulaName, beadID, retErr) }()
 	// Route bd mutations (wisp/bond) to the correct beads context for the target bead.
 	formulaWorkDir := beads.ResolveHookDir(townRoot, beadID, hookWorkDir)
 
@@ -743,15 +743,15 @@ func InstantiateFormulaOnBead(formulaName, beadID, title, hookWorkDir, townRoot 
 					Dir(formulaWorkDir).
 					WithGTRoot(townRoot).
 					Run(); retryErr != nil {
-					telemetry.RecordMolCook(context.Background(), formulaName, retryErr)
+					telemetry.RecordMolCook(ctx, formulaName, retryErr)
 					return nil, fmt.Errorf("cooking formula %s: %w (embedded retry: %v)", formulaName, err, retryErr)
 				}
 			} else {
-				telemetry.RecordMolCook(context.Background(), formulaName, err)
+				telemetry.RecordMolCook(ctx, formulaName, err)
 				return nil, fmt.Errorf("cooking formula %s: %w", formulaName, err)
 			}
 		}
-		telemetry.RecordMolCook(context.Background(), formulaName, nil)
+		telemetry.RecordMolCook(ctx, formulaName, nil)
 	}
 
 	// Build variable list once so both legacy and fallback paths use
@@ -782,10 +782,10 @@ func InstantiateFormulaOnBead(formulaName, beadID, title, hookWorkDir, townRoot 
 	// Parse wisp output to get the root ID
 	wispRootID, err := parseWispIDFromJSON(wispOut)
 	if err != nil {
-		telemetry.RecordMolWisp(context.Background(), formulaName, "", beadID, err)
+		telemetry.RecordMolWisp(ctx, formulaName, "", beadID, err)
 		return nil, fmt.Errorf("parsing wisp output: %w", err)
 	}
-	telemetry.RecordMolWisp(context.Background(), formulaName, wispRootID, beadID, nil)
+	telemetry.RecordMolWisp(ctx, formulaName, wispRootID, beadID, nil)
 
 	// Step 3: Bond wisp to original bead (creates compound).
 	//
