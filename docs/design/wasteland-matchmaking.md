@@ -1,10 +1,11 @@
-# Wasteland Environments — Capability Matchmaking
+# Wasteland Capability Matchmaking
 
-> Spec for capability-aware routing of beads and molecule steps across the Gas Town Wasteland.
+> **Early-stage proposal — opening for discussion.**
+> This document is a design sketch intended to explore the idea of capability-aware routing in the Gas Town Wasteland. Nothing here is decided or committed. The goal is to collect feedback on the direction before any implementation work begins.
 
-**Status**: Draft
+**Status**: Pre-RFC · Early Discussion
 **Related**: [federation.md](federation.md) | [model-aware-molecules.md](model-aware-molecules.md) | [agent-provider-interface.md](agent-provider-interface.md)
-**Implementation**: `internal/wasteland/` · `internal/doltserver/wl_commons.go` · `internal/cmd/wl_*.go`
+**Implementation**: none yet — see §12 for open questions and unresolved decisions
 
 ---
 
