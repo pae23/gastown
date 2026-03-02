@@ -158,26 +158,46 @@ shared      = false                   # internal only, never advertised
 
 The `agent` field maps to an entry in `builtinPresets` (`internal/config/agents.go`). See [agent-provider-interface.md](agent-provider-interface.md) for the full capability matrix.
 
+### Resource field units
+
+The `[compute]` sub-table uses **Kubernetes resource quantity syntax** for cpu/memory/storage — the same units used by Docker, Nomad, and any K8s-backed sandbox runtime:
+
+- **cpu**: cores as a string (`"8"`) or millicores (`"8000m"`) — 1000m = 1 core
+- **memory / gpu_memory**: binary SI suffixes — `"64Gi"`, `"40Gi"` (not `"64GB"`)
+- **storage**: same — `"1Ti"`, `"500Gi"`
+
+The field names are inspired by the **devcontainer `hostRequirements`** spec ([devcontainerjson-reference.md](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainerjson-reference.md)), a CNCF-maintained standard used by VS Code Dev Containers, GitHub Codespaces, and Cursor. `hostRequirements` uses the same vocabulary (`cpus`, `memory`, `storage`, `gpu`) for declaring host-level compute needs in developer tooling contexts — the closest existing standard to what Gas Town profiles need.
+
 ### Sandbox Backend (optional)
 
-A profile can declare a `sandbox_type` to specify the enforcement mechanism for its isolation constraints. When present, the town uses the named backend to create and manage the execution container:
+A profile can declare a `sandbox_type` to specify the enforcement mechanism for its isolation constraints. When present, the town uses the named backend to create and manage the execution container, turning declarative constraints (`network = "isolated"`, compliance tags) into actual OS-level guarantees via Linux namespaces and container isolation.
 
 ```toml
 [envs.secure-sandbox]
-tools        = ["git"]
-network      = "isolated"
-tags         = ["sandbox", "untrusted"]
-agent        = "gemini"
-shared       = true
-sandbox_type = "opensandbox"          # enforcement backend
-sandbox_image = "ubuntu:24.04"        # base image
+tools         = ["git"]
+network       = "isolated"
+tags          = ["sandbox", "untrusted"]
+agent         = "gemini"
+shared        = true
+sandbox_type  = "docker"        # or "opensandbox", "nix", "firecracker", …
+sandbox_image = "ubuntu:24.04"
 
 [security]
-compliance   = ["soc2"]
-audit_log    = true
+compliance = ["soc2"]
+audit_log  = true
 ```
 
-**[OpenSandbox](https://github.com/alibaba/OpenSandbox)** (Alibaba) is the reference backend. It provides a general-purpose sandbox platform for AI agents with Docker/Kubernetes runtimes, per-sandbox egress network controls, and native support for Claude Code, Gemini CLI, and Codex as coding agents. Its lifecycle server exposes a language-agnostic API that `gt` calls to create a sandbox, deliver the step inside it, and tear it down on completion. This is the enforcement layer that turns a profile's declarative constraints (`network = "isolated"`, compliance tags) into actual OS-level guarantees via Linux namespaces and container isolation.
+**Candidate backends** (not yet evaluated — to be confirmed before implementation):
+
+| Backend | Description | Notes |
+|---|---|---|
+| **Docker** | Standard container runtime | Available on Linux + macOS (Docker Desktop). The baseline. |
+| **[OpenSandbox](https://github.com/alibaba/OpenSandbox)** | AI-agent sandbox platform (Alibaba) | Docker/K8s runtimes, per-sandbox egress controls, agents (Claude Code, Gemini CLI, Codex) listed as use cases. Worth evaluating — API maturity and macOS support TBC. |
+| **Firecracker** | MicroVM (AWS) | Strong isolation, Linux only, no macOS. Good for `clearance = "secret"` profiles. |
+| **gVisor** | Kernel sandbox (Google) | Syscall interception, runs on Linux. Intermediate between Docker and Firecracker. |
+| **Nix shell** | Reproducible dev environments | No network isolation, but hermetic tooling. Suitable for `tools`-only constraints without security requirements. |
+
+The choice of backend is a town-level implementation detail. Gas Town defines the interface (`sandbox_type`, `sandbox_image`); the town is responsible for having the backend available. A town that advertises `sandbox_type = "opensandbox"` but does not have the OpenSandbox lifecycle server running will fail at claim time.
 
 Profiles without `sandbox_type` rely on the town's native environment (bare metal, existing VM, `nix-shell`, etc.) — the town certifies compliance by reputation, not by technical enforcement.
 
@@ -298,7 +318,7 @@ ALTER TABLE rigs ADD COLUMN env_profiles JSON;
       "network": "isolated",
       "agent": "claude",
       "agent_caps": ["non_interactive", "hooks", "resume"],
-      "sandbox_type": "opensandbox"
+      "sandbox_type": "docker"
     },
     {
       "name": "gpu-training",
@@ -339,7 +359,7 @@ ALTER TABLE rigs ADD COLUMN env_profiles JSON;
         "clearance": "confidential",
         "audit_log": true
       },
-      "sandbox_type": "opensandbox"
+      "sandbox_type": "docker"
     }
   ]
 }
@@ -720,7 +740,7 @@ Matchmaking rejects towns without `security.compliance = ["hipaa"]` regardless o
 | **Bead env vs step env conflict** | A step declaring `env_tags = ["gpu"]` inside a bead already routed to a `python-isolated` town is a mismatch. Validate at `wl post` time, or at execution time? |
 | **Profile versioning** | `env_profiles` in the `rigs` row is updated on each `gt wl sync`. Peer towns read stale manifests until their next sync. Is eventual consistency sufficient, or does compute/data routing need fresher capability data? |
 | **Transitive delegation** | Town A delegates to Town B which delegates to Town C — should chained delegation be allowed? The `parent_completion_id` column in `completions` hints at this, but the lifecycle isn't defined. |
-| **OpenSandbox on macOS** | OpenSandbox is Docker/Kubernetes-based (Linux containers). Towns running on macOS need Docker Desktop. Document as a requirement for profiles with `sandbox_type = "opensandbox"`, or find a macOS-native alternative. |
+| **Sandbox backend selection** | No backend has been formally evaluated yet. OpenSandbox, Firecracker, gVisor, and plain Docker are candidates. Criteria: macOS support (Docker Desktop is a hard dep for non-Linux towns), API maturity, agent compatibility (Claude Code, Gemini CLI, Codex), security audit trail. Needs a dedicated evaluation before implementation. |
 | **Compliance certification** | `security.compliance = ["hipaa"]` is a self-certification. Nothing prevents a town from lying. Should compliance-tagged profiles require an out-of-band attestation (signed document, badge in `wl-commons.badges`)? |
 | **Agent version pinning** | Should a bead or step require a minimum agent version (e.g. `claude >= 1.2`)? `gt_version` is in `rigs` but refers to the Gas Town binary, not the agent. |
 | **Model↔agent mismatch** | If a step declares `model = "claude-opus-4-6"` but the matched town's profile has `agent = "gemini"`, the router should reject. Validated at `wl post` or at claim time? |
