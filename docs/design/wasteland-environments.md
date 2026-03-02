@@ -70,12 +70,11 @@ agent        = "claude"
 shared       = true
 
 [compute]
-gpu          = "nvidia-a100"
-gpu_memory   = "40GB"
-cpu_cores    = 32
-ram          = "128GB"
-storage      = "2TB"
-storage_type = "nvme"
+# devcontainer hostRequirements fields (https://github.com/devcontainers/spec)
+cpus    = 32
+memory  = "128gb"
+storage = "2tb"
+gpu     = "nvidia-a100"   # extended: model hint for matchmaking
 
 [envs.datalake-analyst]
 description = "Read-only access to S3 data lake + Athena"
@@ -129,16 +128,14 @@ shared      = false                   # internal only, never advertised
 | `agent` | string | Agent preset (`"claude"`, `"gemini"`, `"codex"`, …). Empty = any available |
 | `shared` | bool | Whether this profile is advertised to Wasteland peers (default: false) |
 
-**`[compute]` sub-table** (optional):
+**`[compute]` sub-table** (optional) — conforms to [devcontainer `hostRequirements`](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainerjson-reference.md):
 
 | Field | Type | Description |
 |---|---|---|
-| `gpu` | string | GPU model (e.g. `"nvidia-a100"`, `"nvidia-l4"`) or `"any"` |
-| `gpu_memory` | string | Minimum GPU VRAM (e.g. `"40GB"`) |
-| `cpu_cores` | int | Minimum CPU core count |
-| `ram` | string | Minimum RAM (e.g. `"64GB"`) |
-| `storage` | string | Minimum disk space (e.g. `"1TB"`) |
-| `storage_type` | string | `"ssd"` · `"nvme"` · `"hdd"` |
+| `cpus` | int | Minimum CPU core count |
+| `memory` | string | Minimum RAM — devcontainer format: `"8gb"`, `"64gb"` |
+| `storage` | string | Minimum disk space — devcontainer format: `"32gb"`, `"2tb"` |
+| `gpu` | string \| bool | `true` / `"optional"` / `"required"` (devcontainer), or GPU model string for matchmaking (e.g. `"nvidia-a100"`) |
 
 **`[data]` sub-table** (optional):
 
@@ -160,13 +157,13 @@ The `agent` field maps to an entry in `builtinPresets` (`internal/config/agents.
 
 ### Resource field units
 
-The `[compute]` sub-table uses **Kubernetes resource quantity syntax** for cpu/memory/storage — the same units used by Docker, Nomad, and any K8s-backed sandbox runtime:
+The `[compute]` sub-table conforms to the **devcontainer `hostRequirements`** spec ([devcontainerjson-reference.md](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainerjson-reference.md)), a CNCF-maintained standard used by VS Code Dev Containers, GitHub Codespaces, and Cursor. Gas Town adopts this spec as-is so that a profile's `[compute]` block maps directly to a valid devcontainer `hostRequirements` object and can be consumed by any devcontainer-compatible tooling without conversion.
 
-- **cpu**: cores as a string (`"8"`) or millicores (`"8000m"`) — 1000m = 1 core
-- **memory / gpu_memory**: binary SI suffixes — `"64Gi"`, `"40Gi"` (not `"64GB"`)
-- **storage**: same — `"1Ti"`, `"500Gi"`
+Field units as defined by the spec:
 
-The field names are inspired by the **devcontainer `hostRequirements`** spec ([devcontainerjson-reference.md](https://github.com/devcontainers/spec/blob/main/docs/specs/devcontainerjson-reference.md)), a CNCF-maintained standard used by VS Code Dev Containers, GitHub Codespaces, and Cursor. `hostRequirements` uses the same vocabulary (`cpus`, `memory`, `storage`, `gpu`) for declaring host-level compute needs in developer tooling contexts — the closest existing standard to what Gas Town profiles need.
+- **`cpus`**: integer core count
+- **`memory`** / **`storage`**: string with lowercase suffix — `"8gb"`, `"64gb"`, `"1tb"`
+- **`gpu`**: `true`, `"optional"`, or `"required"` for basic declarations; Gas Town extends this to accept a model string (e.g. `"nvidia-a100"`) as a matchmaking hint when a specific GPU is required
 
 ### Sandbox Backend (optional)
 
