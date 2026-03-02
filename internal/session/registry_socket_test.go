@@ -8,14 +8,9 @@ import (
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
-// TestInitRegistry_SocketFromTownName verifies that InitRegistry always uses
-// the "default" tmux socket, regardless of town name or $TMUX environment.
-//
-// Previously (gt-qkekp), the socket was derived from the town directory name
-// for multi-town isolation. Commit 635916ab changed this to always use
-// "default" because per-town sockets caused cross-socket bugs and split
-// session visibility, while providing no real isolation benefit (multi-town
-// already requires containers/VMs due to singleton session names).
+// TestInitRegistry_SocketFromTownName verifies that InitRegistry derives the
+// tmux socket name from the town directory name, giving each Gas Town instance
+// its own tmux server (e.g. town "gt-test" → socket "-L gt-test").
 func TestInitRegistry_SocketFromTownName(t *testing.T) {
 	// Save and restore $TMUX and the default socket
 	origTMUX := os.Getenv("TMUX")
@@ -35,31 +30,31 @@ func TestInitRegistry_SocketFromTownName(t *testing.T) {
 			name:       "inside default tmux, town=gt",
 			tmuxEnv:    "/tmp/tmux-1000/default,12345,0",
 			townDir:    "gt",
-			wantSocket: "default",
+			wantSocket: "gt",
 		},
 		{
 			name:       "inside gt tmux, town=gt",
 			tmuxEnv:    "/tmp/tmux-1000/gt,12345,0",
 			townDir:    "gt",
-			wantSocket: "default",
+			wantSocket: "gt",
 		},
 		{
 			name:       "outside tmux (daemon), town=gt",
 			tmuxEnv:    "",
 			townDir:    "gt",
-			wantSocket: "default",
+			wantSocket: "gt",
 		},
 		{
 			name:       "town name with spaces",
 			tmuxEnv:    "/tmp/tmux-1000/default,99,0",
 			townDir:    "My Town",
-			wantSocket: "default",
+			wantSocket: "my-town",
 		},
 		{
 			name:       "town name with caps",
 			tmuxEnv:    "",
 			townDir:    "GasTown",
-			wantSocket: "default",
+			wantSocket: "gastown",
 		},
 	}
 
