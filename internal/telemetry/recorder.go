@@ -112,6 +112,33 @@ var (
 	inst     recorderInstruments
 )
 
+// contentLimits caches configurable truncation limits parsed from env at first use.
+// Env vars are read once — changing them at runtime has no effect.
+var (
+	limitsOnce       sync.Once
+	agentContentLim  int // GT_LOG_AGENT_CONTENT_LIMIT, default 512
+	bdContentLim     int // GT_LOG_BD_CONTENT_LIMIT, default 2048
+	paneContentLim   int // GT_LOG_PANE_CONTENT_LIMIT, default 8192
+)
+
+func initContentLimits() {
+	limitsOnce.Do(func() {
+		agentContentLim = envInt("GT_LOG_AGENT_CONTENT_LIMIT", 512)
+		bdContentLim = envInt("GT_LOG_BD_CONTENT_LIMIT", 2048)
+		paneContentLim = envInt("GT_LOG_PANE_CONTENT_LIMIT", 8192)
+	})
+}
+
+// envInt returns the integer value of the named env var, or defaultVal if unset or unparseable.
+func envInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
+
 // initInstruments registers all recorder metric instruments against the current
 // global MeterProvider. Must be called after telemetry.Init so the real
 // provider is set. Also called lazily on first use as a safety net.
@@ -286,12 +313,13 @@ func RecordBDCall(ctx context.Context, args []string, durationMs float64, err er
 		otellog.String("status", status),
 		errKV(err),
 	}
-	// stdout/stderr are opt-in: they may contain tokens or PII returned by bd.
-	// Content is logged in full (no truncation) when GT_LOG_BD_OUTPUT=true.
+	// stdout/stderr are opt-in (may contain tokens or PII returned by bd).
+	// Truncated to GT_LOG_BD_CONTENT_LIMIT bytes (default 2048).
 	if os.Getenv("GT_LOG_BD_OUTPUT") == "true" {
+		initContentLimits()
 		kvs = append(kvs,
-			otellog.String("stdout", string(stdout)),
-			otellog.String("stderr", stderr),
+			otellog.String("stdout", truncateOutput(string(stdout), bdContentLim)),
+			otellog.String("stderr", truncateOutput(stderr, bdContentLim)),
 		)
 	}
 	emit(ctx, "bd.call", severity(err), kvs...)
@@ -749,14 +777,16 @@ func RecordBeadCreate(ctx context.Context, beadID, parentID, molSource string) {
 
 // RecordPaneOutput emits a chunk of raw pane output (ANSI already stripped) to VictoriaLogs.
 // Opt-in: only called when GT_LOG_PANE_OUTPUT=true.
+// Content is truncated to GT_LOG_PANE_CONTENT_LIMIT bytes (default 8192).
 func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 	initInstruments()
+	initContentLimits()
 	inst.paneOutputTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("session", sessionID),
 	))
 	emit(ctx, "pane.output", otellog.SeverityInfo,
 		otellog.String("session", sessionID),
-		otellog.String("content", content),
+		otellog.String("content", truncateOutput(content, paneContentLim)),
 	)
 }
 
@@ -785,19 +815,14 @@ func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role
 		r.SetTimestamp(ts)
 	}
 	// Truncate content to limit PII/secret exposure in telemetry backends.
-	// Default limit is 512 bytes. Set GT_LOG_AGENT_CONTENT_LIMIT=0 to disable.
-	contentLimit := 512
-	if v := os.Getenv("GT_LOG_AGENT_CONTENT_LIMIT"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			contentLimit = n
-		}
-	}
+	// Limit is cached at first call; default 512 bytes. GT_LOG_AGENT_CONTENT_LIMIT=0 disables.
+	initContentLimits()
 	r.AddAttributes(
 		otellog.String("session", sessionID),
 		otellog.String("agent_type", agentType),
 		otellog.String("event_type", eventType),
 		otellog.String("role", role),
-		otellog.String("content", truncateOutput(content, contentLimit)),
+		otellog.String("content", truncateOutput(content, agentContentLim)),
 		otellog.String("native_session_id", nativeSessionID),
 	)
 	addRunID(ctx, &r)

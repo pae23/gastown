@@ -21,7 +21,6 @@ import (
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
-	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
@@ -301,13 +300,9 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	// when the polecat's cwd is deleted before gt done finishes, these env vars allow
 	// branch detection and path resolution without a working directory.
 	polecatGitBranch := ""
-	polecatGitCommit := ""
 	if g := git.NewGit(workDir); g != nil {
 		if b, err := g.CurrentBranch(); err == nil {
 			polecatGitBranch = b
-		}
-		if c, err := g.Rev("HEAD"); err == nil {
-			polecatGitCommit = c
 		}
 	}
 	// Generate the GASTA run ID — the root identifier for all telemetry emitted
@@ -478,22 +473,8 @@ func (m *SessionManager) Start(polecat string, opts SessionStartOptions) error {
 	}
 
 	// Record the agent instantiation event (GASTA root span).
-	agentType := runtimeConfig.ResolvedAgent
-	if agentType == "" {
-		agentType = "claudecode"
-	}
-	telemetry.RecordAgentInstantiate(context.Background(), telemetry.AgentInstantiateInfo{
-		RunID:     runID,
-		AgentType: agentType,
-		Role:      "polecat",
-		AgentName: polecat,
-		SessionID: sessionID,
-		RigName:   m.rig.Name,
-		TownRoot:  townRoot,
-		IssueID:   opts.Issue,
-		GitBranch: polecatGitBranch,
-		GitCommit: polecatGitCommit,
-	})
+	session.RecordAgentInstantiateFromDir(context.Background(), runID, runtimeConfig.ResolvedAgent,
+		"polecat", polecat, sessionID, m.rig.Name, townRoot, opts.Issue, workDir)
 
 	return nil
 }

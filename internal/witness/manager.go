@@ -13,13 +13,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
-	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
-	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -232,30 +230,8 @@ func (m *Manager) Start(foreground bool, agentOverride string, envOverrides []st
 	}
 
 	// Record the agent instantiation event (GASTA root span).
-	agentType := runtimeConfig.ResolvedAgent
-	if agentType == "" {
-		agentType = "claudecode"
-	}
-	witnessBranch, witnessCommit := "", ""
-	if g := git.NewGit(witnessDir); g != nil {
-		if b, err := g.CurrentBranch(); err == nil {
-			witnessBranch = b
-		}
-		if c, err := g.Rev("HEAD"); err == nil {
-			witnessCommit = c
-		}
-	}
-	telemetry.RecordAgentInstantiate(context.Background(), telemetry.AgentInstantiateInfo{
-		RunID:     runID,
-		AgentType: agentType,
-		Role:      "witness",
-		AgentName: "witness",
-		SessionID: sessionID,
-		RigName:   m.rig.Name,
-		TownRoot:  townRoot,
-		GitBranch: witnessBranch,
-		GitCommit: witnessCommit,
-	})
+	session.RecordAgentInstantiateFromDir(context.Background(), runID, runtimeConfig.ResolvedAgent,
+		"witness", "witness", sessionID, m.rig.Name, townRoot, "", witnessDir)
 
 	time.Sleep(constants.ShutdownNotifyDelay)
 

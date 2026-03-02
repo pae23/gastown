@@ -292,32 +292,42 @@ func StartSession(t *tmux.Tmux, cfg SessionConfig) (_ *StartResult, retErr error
 
 	// Record the agent instantiation event (GASTA root span).
 	// Done after session creation so we only emit on success.
-	agentType := runtimeConfig.ResolvedAgent
+	RecordAgentInstantiateFromDir(ctx, runID, runtimeConfig.ResolvedAgent,
+		cfg.Role, cfg.AgentName, cfg.SessionID, cfg.RigName, cfg.TownRoot, "", cfg.WorkDir)
+
+	return &StartResult{RuntimeConfig: runtimeConfig, RunID: runID}, nil
+}
+
+// RecordAgentInstantiateFromDir resolves the git branch/commit from workDir and
+// emits the agent.instantiate root telemetry event. resolvedAgent defaults to
+// "claudecode" when empty. Use this instead of calling telemetry.RecordAgentInstantiate
+// directly to avoid duplicating the agentType/git-lookup boilerplate.
+func RecordAgentInstantiateFromDir(ctx context.Context, runID, resolvedAgent, role, agentName, sessionID, rigName, townRoot, issueID, workDir string) {
+	agentType := resolvedAgent
 	if agentType == "" {
 		agentType = "claudecode"
 	}
-	sessionBranch, sessionCommit := "", ""
-	if g := git.NewGit(cfg.WorkDir); g != nil {
+	branch, commit := "", ""
+	if g := git.NewGit(workDir); g != nil {
 		if b, err := g.CurrentBranch(); err == nil {
-			sessionBranch = b
+			branch = b
 		}
 		if c, err := g.Rev("HEAD"); err == nil {
-			sessionCommit = c
+			commit = c
 		}
 	}
 	telemetry.RecordAgentInstantiate(ctx, telemetry.AgentInstantiateInfo{
 		RunID:     runID,
 		AgentType: agentType,
-		Role:      cfg.Role,
-		AgentName: cfg.AgentName,
-		SessionID: cfg.SessionID,
-		RigName:   cfg.RigName,
-		TownRoot:  cfg.TownRoot,
-		GitBranch: sessionBranch,
-		GitCommit: sessionCommit,
+		Role:      role,
+		AgentName: agentName,
+		SessionID: sessionID,
+		RigName:   rigName,
+		TownRoot:  townRoot,
+		IssueID:   issueID,
+		GitBranch: branch,
+		GitCommit: commit,
 	})
-
-	return &StartResult{RuntimeConfig: runtimeConfig, RunID: runID}, nil
 }
 
 // StopSession stops a tmux session with optional graceful shutdown.

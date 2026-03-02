@@ -16,13 +16,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/config"
-	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/style"
-	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/tmux"
 )
 
@@ -232,30 +230,8 @@ func (m *Manager) Start(foreground bool, agentOverride string) error {
 	}
 
 	// Record the agent instantiation event (GASTA root span).
-	agentType := runtimeConfig.ResolvedAgent
-	if agentType == "" {
-		agentType = "claudecode"
-	}
-	refineryBranch, refineryCommit := "", ""
-	if g := git.NewGit(refineryRigDir); g != nil {
-		if b, err := g.CurrentBranch(); err == nil {
-			refineryBranch = b
-		}
-		if c, err := g.Rev("HEAD"); err == nil {
-			refineryCommit = c
-		}
-	}
-	telemetry.RecordAgentInstantiate(context.Background(), telemetry.AgentInstantiateInfo{
-		RunID:     runID,
-		AgentType: agentType,
-		Role:      "refinery",
-		AgentName: "refinery",
-		SessionID: sessionID,
-		RigName:   m.rig.Name,
-		TownRoot:  townRoot,
-		GitBranch: refineryBranch,
-		GitCommit: refineryCommit,
-	})
+	session.RecordAgentInstantiateFromDir(context.Background(), runID, runtimeConfig.ResolvedAgent,
+		"refinery", "refinery", sessionID, m.rig.Name, townRoot, "", refineryRigDir)
 
 	return nil
 }
