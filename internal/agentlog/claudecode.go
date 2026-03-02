@@ -96,12 +96,22 @@ func (a *ClaudeCodeAdapter) Watch(ctx context.Context, sessionID, workDir string
 
 // claudeProjectDirFor returns the Claude Code project directory for workDir.
 // Formula: $HOME/.claude/projects/<hash> where hash = workDir with '/' → '-'.
+// On Windows, backslashes are converted to forward slashes and the drive
+// letter (e.g. "C:") is stripped before hashing, matching Claude Code's
+// cross-platform behaviour.
 func claudeProjectDirFor(workDir string) (string, error) {
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
 		return "", fmt.Errorf("resolving absolute path: %w", err)
 	}
-	hash := strings.ReplaceAll(abs, "/", "-")
+	// Normalize to forward slashes (no-op on Unix).
+	normalized := filepath.ToSlash(abs)
+	// Strip Windows drive letter prefix (e.g. "C:") so the hash matches
+	// what Claude Code stores on Windows (hash starts with '-', not 'C:').
+	if len(normalized) >= 2 && normalized[1] == ':' {
+		normalized = normalized[2:]
+	}
+	hash := strings.ReplaceAll(normalized, "/", "-")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("getting home dir: %w", err)
