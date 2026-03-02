@@ -791,7 +791,7 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 }
 
 // RecordAgentEvent emits a structured agent conversation event.
-// Opt-in: only called when GT_LOG_AGENT_OUTPUT=true.
+// Opt-in: requires GT_LOG_AGENT_OUTPUT=true (enforced here so callers can't bypass it).
 //
 // agentType is the adapter name ("claudecode", "opencode", …).
 // eventType is one of "text", "tool_use", "tool_result", "thinking".
@@ -801,6 +801,9 @@ func RecordPaneOutput(ctx context.Context, sessionID, content string) {
 // content is truncated to 512 bytes to limit PII exposure; set
 // GT_LOG_AGENT_CONTENT_LIMIT=0 to disable truncation (experts only).
 func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role, content, nativeSessionID string, ts time.Time) {
+	if os.Getenv("GT_LOG_AGENT_OUTPUT") != "true" {
+		return
+	}
 	initInstruments()
 	inst.agentEventTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("session", sessionID),
