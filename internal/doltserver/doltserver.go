@@ -601,11 +601,13 @@ type DoltListener struct {
 // FindAllDoltListeners discovers all Dolt processes with TCP listeners using lsof.
 // Uses process binary name matching (-c dolt) instead of command-line string matching
 // (pgrep -f), avoiding fragile ps/pgrep pattern coupling (ZFC fix: gt-fj87).
+// The -a flag is critical: without it, lsof ORs -c and -i selections, matching ANY
+// process with TCP listeners (not just dolt). With -a, selections are ANDed (fix: gt-lzdp).
 func FindAllDoltListeners() []DoltListener {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "lsof", "-c", "dolt", "-sTCP:LISTEN", "-i", "TCP", "-n", "-P", "-F", "pn")
+	cmd := exec.CommandContext(ctx, "lsof", "-a", "-c", "dolt", "-sTCP:LISTEN", "-i", "TCP", "-n", "-P", "-F", "pn")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
