@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/beads"
+	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/lock"
 	"github.com/steveyegge/gastown/internal/state"
 	"github.com/steveyegge/gastown/internal/style"
@@ -609,8 +610,13 @@ func outputHookedBeadDetails(hookedBead *beads.Issue) {
 
 // outputMoleculeWorkflow displays attached molecule context with current step.
 func outputMoleculeWorkflow(ctx RoleContext, attachment *beads.AttachmentFields) {
-	fmt.Printf("%s\n\n", style.Bold.Render("## 🧬 ATTACHED MOLECULE (FORMULA WORKFLOW)"))
-	fmt.Printf("Molecule ID: %s\n", attachment.AttachedMolecule)
+	fmt.Printf("%s\n\n", style.Bold.Render("## 🧬 ATTACHED FORMULA (WORKFLOW CHECKLIST)"))
+	if attachment.AttachedFormula != "" {
+		fmt.Printf("Formula: %s\n", attachment.AttachedFormula)
+	}
+	if attachment.AttachedMolecule != "" {
+		fmt.Printf("Molecule ID: %s\n", attachment.AttachedMolecule)
+	}
 	if attachment.AttachedArgs != "" {
 		fmt.Printf("\n%s\n", style.Bold.Render("📋 ARGS (use these to guide execution):"))
 		fmt.Printf("  %s\n", attachment.AttachedArgs)
@@ -623,10 +629,19 @@ func outputMoleculeWorkflow(ctx RoleContext, attachment *beads.AttachmentFields)
 		return
 	}
 
-	showMoleculeExecutionPrompt(ctx.WorkDir, attachment.AttachedMolecule)
+	// Show inline formula steps from the embedded binary (root-only: no child wisps to query).
+	if attachment.AttachedFormula != "" {
+		showFormulaStepsFull(attachment.AttachedFormula)
+		fmt.Println()
+		fmt.Printf("%s\n", style.Bold.Render("Work through the checklist above. When all steps complete, run `"+cli.Name()+" done`."))
+		fmt.Println("The base bead is your assignment. The formula steps define your workflow.")
+		return
+	}
 
+	// Legacy path: no formula name stored, fall back to bd mol current
+	showMoleculeExecutionPrompt(ctx.WorkDir, attachment.AttachedMolecule)
 	fmt.Println()
-	fmt.Printf("%s\n", style.Bold.Render("⚠️  IMPORTANT: Follow the molecule steps above, NOT the base bead."))
+	fmt.Printf("%s\n", style.Bold.Render("Follow the molecule steps above, NOT the base bead."))
 	fmt.Println("The base bead is just a container. The molecule steps define your workflow.")
 }
 

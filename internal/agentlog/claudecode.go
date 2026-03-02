@@ -59,13 +59,25 @@ func (a *ClaudeCodeAdapter) Watch(ctx context.Context, sessionID, workDir string
 	go func() {
 		defer close(ch)
 
-		// Loop: find the active JSONL file, tail it, then switch when a newer
-		// one appears (new Claude session). This handles ephemeral Claude instances.
+		// Loop indefinitely: find the active JSONL file, tail it, then switch when a newer
+		// one appears (new Claude session). ctx cancellation is the only exit.
+		// Timeouts from waitForNewestJSONL are retried so that agent restarts or late
+		// session starts (JSONL file appearing after the 30s window) are picked up.
 		var currentPath string
 		for {
+			if ctx.Err() != nil {
+				return
+			}
 			jsonlPath, err := waitForNewestJSONL(ctx, projectDir, since)
 			if err != nil {
-				return // context canceled or timeout — non-fatal
+				// ctx was canceled — clean exit.
+				if ctx.Err() != nil {
+					return
+				}
+				// Timeout: no JSONL appeared in 30s. Claude may not have started yet
+				// or the agent restarted. Reset `since` so we pick up any new file.
+				since = time.Now().Add(-watchPollInterval)
+				continue
 			}
 
 			currentPath = jsonlPath
@@ -314,9 +326,12 @@ func parseClaudeCodeLine(line, sessionID, agentType, nativeSessionID string) []A
 
 	// Emit a dedicated "usage" event once per assistant turn so token counts
 	// are not duplicated across content blocks of the same message.
+	// Check all four token fields: a cache-only turn has InputTokens == 0 and
+	// OutputTokens == 0 but non-zero CacheReadInputTokens, which must still be
+	// recorded for accurate cost accounting.
 	if entry.Type == "assistant" && entry.Message.Usage != nil {
 		u := entry.Message.Usage
-		if u.InputTokens > 0 || u.OutputTokens > 0 {
+		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0 {
 			events = append(events, AgentEvent{
 				AgentType:           agentType,
 				SessionID:           sessionID,
