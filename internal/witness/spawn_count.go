@@ -8,11 +8,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steveyegge/gastown/internal/lock"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
 
-// respawnMu serializes recordBeadRespawn calls to prevent concurrent
-// load-modify-save cycles from losing respawn count increments.
+// respawnMu serializes in-process access to the respawn state file.
+// Cross-process serialization is handled by lock.FlockAcquire on a
+// sibling .flock file (see RecordBeadRespawn, ShouldBlockRespawn, etc.).
 var respawnMu sync.Mutex
 
 // DefaultMaxBeadRespawns is the threshold at which respawns are BLOCKED and
@@ -77,6 +79,13 @@ func ShouldBlockRespawn(workDir, beadID string) bool {
 	if err != nil || townRoot == "" {
 		townRoot = workDir
 	}
+
+	// Cross-process flock to serialize with other witness instances.
+	unlock, flockErr := lock.FlockAcquire(beadRespawnStateFile(townRoot) + ".flock")
+	if flockErr == nil {
+		defer unlock()
+	}
+
 	state := loadBeadRespawnState(townRoot)
 	rec, ok := state.Beads[beadID]
 	if !ok {
@@ -90,8 +99,8 @@ func ShouldBlockRespawn(workDir, beadID string) bool {
 // On state file errors the count is still incremented in memory and returned, so the
 // caller can log/warn without blocking the respawn itself.
 //
-// Serialized via respawnMu to prevent concurrent patrol cycles from racing on
-// the load-modify-save cycle and losing count increments.
+// Serialized via respawnMu (in-process) and flock (cross-process) to prevent
+// concurrent patrol cycles from racing on the load-modify-save cycle.
 func RecordBeadRespawn(workDir, beadID string) int {
 	respawnMu.Lock()
 	defer respawnMu.Unlock()
@@ -100,6 +109,13 @@ func RecordBeadRespawn(workDir, beadID string) int {
 	if err != nil || townRoot == "" {
 		townRoot = workDir
 	}
+
+	// Cross-process flock to serialize with other witness instances.
+	unlock, flockErr := lock.FlockAcquire(beadRespawnStateFile(townRoot) + ".flock")
+	if flockErr == nil {
+		defer unlock()
+	}
+
 	state := loadBeadRespawnState(townRoot)
 	rec, ok := state.Beads[beadID]
 	if !ok {
@@ -122,6 +138,13 @@ func ResetBeadRespawnCount(workDir, beadID string) error {
 	if err != nil || townRoot == "" {
 		townRoot = workDir
 	}
+
+	// Cross-process flock to serialize with other witness instances.
+	unlock, flockErr := lock.FlockAcquire(beadRespawnStateFile(townRoot) + ".flock")
+	if flockErr == nil {
+		defer unlock()
+	}
+
 	state := loadBeadRespawnState(townRoot)
 	delete(state.Beads, beadID)
 	return saveBeadRespawnState(townRoot, state)
