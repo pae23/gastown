@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1195,8 +1196,14 @@ func isZombieState(agentState beads.AgentState, hookBead string) bool {
 // cleanup wisp for tracking but does NOT escalate — the witness agent decides
 // whether to escalate based on the reported CleanupStatus (ZFC gt-5rne).
 // Error chaining (gt-v95d): multiple errors are preserved, not silently dropped.
+//
+// gt-7vs1: For dirty state, uses create-then-dedup pattern to prevent TOCTOU races
+// between concurrent patrol cycles. The cleanup wisp is created first as an atomic
+// interlock, then checked for duplicates. Deterministic winner selection (lowest
+// wisp ID) ensures exactly one patrol proceeds with the restart.
 func handleZombieRestart(workDir, rigName, polecatName, hookBead, cleanupStatus string, zombie *ZombieResult) {
 	zombie.CleanupStatus = cleanupStatus
+	skipRestart := false
 
 	switch cleanupStatus {
 	case "clean", "":
@@ -1205,16 +1212,52 @@ func handleZombieRestart(workDir, rigName, polecatName, hookBead, cleanupStatus 
 	case "has_uncommitted", "has_stash", "has_unpushed":
 		// Dirty state — create cleanup wisp for tracking if not already tracked.
 		// ZFC (gt-5rne): Report data, don't escalate. The witness agent decides policy.
+
+		// Fast path: if a cleanup wisp already exists from a previous patrol cycle,
+		// the polecat was already restarted and became zombie again. Just restart.
 		existingWisp := findAnyCleanupWisp(workDir, polecatName)
 		if existingWisp != "" {
 			zombie.Action = fmt.Sprintf("already-tracked (cleanup_status=%s, existing-wisp=%s)", cleanupStatus, existingWisp)
-		} else {
-			wispID, wispErr := createCleanupWisp(workDir, polecatName, hookBead, "")
-			if wispErr != nil {
-				zombie.Error = fmt.Errorf("cleanup wisp: %w", wispErr)
+			break
+		}
+
+		// No existing wisp — create one as the atomic interlock (gt-7vs1).
+		// Previous code checked then created, allowing two concurrent patrols to
+		// both see "no wisp" and create duplicates. Now we create first, then dedup.
+		wispID, wispErr := createCleanupWisp(workDir, polecatName, hookBead, "")
+		if wispErr != nil {
+			zombie.Error = fmt.Errorf("cleanup wisp: %w", wispErr)
+			zombie.Action = fmt.Sprintf("restarted-dirty (cleanup_status=%s, wisp-failed)", cleanupStatus)
+			break
+		}
+
+		// Dedup: re-check after creation to detect races with concurrent patrols.
+		// If another patrol also just created a wisp, there will be >1. Use
+		// deterministic winner selection (lowest wisp ID) so exactly one patrol
+		// proceeds with the restart and the other cleans up its duplicate.
+		allWisps := findAllCleanupWisps(workDir, polecatName)
+		if len(allWisps) > 1 {
+			sort.Strings(allWisps)
+			if wispID != allWisps[0] {
+				// Lost the race — close our duplicate and skip restart to avoid
+				// disrupting the session the winning patrol is starting.
+				_, _ = bdExec(workDir, "close", wispID, "--reason=duplicate: concurrent patrol race (gt-7vs1)")
+				zombie.Action = fmt.Sprintf("already-tracked (cleanup_status=%s, existing-wisp=%s, closed-dup=%s)", cleanupStatus, allWisps[0], wispID)
+				skipRestart = true
+			} else {
+				// Won the race — clean up the other patrol's duplicate(s).
+				for _, w := range allWisps[1:] {
+					_, _ = bdExec(workDir, "close", w, "--reason=duplicate: concurrent patrol race (gt-7vs1)")
+				}
+				zombie.Action = fmt.Sprintf("restarted-dirty (cleanup_status=%s, wisp=%s)", cleanupStatus, wispID)
 			}
+		} else {
 			zombie.Action = fmt.Sprintf("restarted-dirty (cleanup_status=%s, wisp=%s)", cleanupStatus, wispID)
 		}
+	}
+
+	if skipRestart {
+		return
 	}
 
 	// Restart regardless of cleanup state — the worktree is preserved.
@@ -2181,6 +2224,34 @@ func findAnyCleanupWisp(workDir, polecatName string) string {
 		return ""
 	}
 	return items[0].ID
+}
+
+// findAllCleanupWisps returns all open cleanup wisp IDs for a polecat.
+// Used for dedup after wisp creation to detect races between concurrent patrol
+// cycles (gt-7vs1). If the query fails, returns nil (caller treats as no race).
+func findAllCleanupWisps(workDir, polecatName string) []string {
+	output, err := bdExec(workDir, "list",
+		"--label", fmt.Sprintf("cleanup,polecat:%s", polecatName),
+		"--status", "open",
+		"--json",
+	)
+	if err != nil {
+		return nil
+	}
+	if output == "" || output == "[]" || output == "null" {
+		return nil
+	}
+	var items []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(output), &items); err != nil || len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+	}
+	return ids
 }
 
 // hasPendingMR checks if a polecat has work waiting in the refinery merge queue.

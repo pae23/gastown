@@ -417,6 +417,60 @@ func TestFindAnyCleanupWisp_UsesCorrectBdListFlags(t *testing.T) {
 	}
 }
 
+func TestFindAllCleanupWisps_NoBdAvailable(t *testing.T) {
+	t.Parallel()
+	// When bd is not available, findAllCleanupWisps should return nil
+	result := findAllCleanupWisps("/nonexistent", "testpolecat")
+	if result != nil {
+		t.Errorf("findAllCleanupWisps = %v, want nil when bd unavailable", result)
+	}
+}
+
+func TestFindAllCleanupWisps_ReturnsAllIDs(t *testing.T) {
+	mock := installMockBd(t,
+		func(args []string) (string, error) {
+			if len(args) > 0 && args[0] == "list" {
+				return `[{"id":"gt-wisp-aaa"},{"id":"gt-wisp-bbb"}]`, nil
+			}
+			return "{}", nil
+		},
+		func(args []string) error { return nil },
+	)
+	workDir := t.TempDir()
+
+	result := findAllCleanupWisps(workDir, "nux")
+
+	if len(result) != 2 {
+		t.Fatalf("findAllCleanupWisps: got %d items, want 2", len(result))
+	}
+	if result[0] != "gt-wisp-aaa" || result[1] != "gt-wisp-bbb" {
+		t.Errorf("findAllCleanupWisps: got %v, want [gt-wisp-aaa gt-wisp-bbb]", result)
+	}
+
+	got := strings.Join(mock.calls, "\n")
+	if !strings.Contains(got, "--label") {
+		t.Errorf("findAllCleanupWisps: expected --label flag, got: %s", got)
+	}
+	if !strings.Contains(got, "polecat:nux") {
+		t.Errorf("findAllCleanupWisps: expected polecat:nux label, got: %s", got)
+	}
+}
+
+func TestFindAllCleanupWisps_EmptyList(t *testing.T) {
+	_ = installMockBd(t,
+		func(args []string) (string, error) {
+			return "[]", nil
+		},
+		func(args []string) error { return nil },
+	)
+	workDir := t.TempDir()
+
+	result := findAllCleanupWisps(workDir, "nux")
+	if result != nil {
+		t.Errorf("findAllCleanupWisps: got %v, want nil for empty list", result)
+	}
+}
+
 func TestUpdateCleanupWispState_UsesCorrectBdUpdateFlags(t *testing.T) {
 	mock := installFakeBd(t)
 	workDir := t.TempDir()
