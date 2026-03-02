@@ -1579,6 +1579,16 @@ func StopDaemon(townRoot string) error {
 		return fmt.Errorf("daemon is not running")
 	}
 
+	if pid <= 0 {
+		// Lock is held but PID is unknown (race: daemon starting, or stale lock).
+		// Clean up the lock file so the next gt up can start fresh.
+		lockPath := filepath.Join(townRoot, "daemon", "daemon.lock")
+		_ = os.Remove(lockPath)
+		pidFile := filepath.Join(townRoot, "daemon", "daemon.pid")
+		_ = os.Remove(pidFile)
+		return nil
+	}
+
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("finding process: %w", err)
