@@ -264,7 +264,7 @@ func TestEnsureGitignorePatterns_CreatesNewFile(t *testing.T) {
 	}
 
 	// Check all required patterns are present (.beads/ intentionally excluded — see overlay.go)
-	patterns := []string{".runtime/", ".claude/", ".logs/", "__pycache__/"}
+	patterns := []string{".runtime/", ".claude/", ".logs/", "__pycache__/", "state.json"}
 	for _, pattern := range patterns {
 		if !containsLine(string(content), pattern) {
 			t.Errorf(".gitignore missing pattern %q", pattern)
@@ -397,7 +397,7 @@ func TestEnsureGitignorePatterns_AllPatternsPresent(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create existing .gitignore with all required patterns.
-	existing := ".runtime/\n.claude/\n.beads/\n.logs/\n__pycache__/\n"
+	existing := ".runtime/\n.claude/\n.beads/\n.logs/\n__pycache__/\nstate.json\n"
 	if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(existing), 0644); err != nil {
 		t.Fatalf("Failed to create .gitignore: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestEnsureGitignorePatterns_NarrowPatternPresent(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create .gitignore with the exact required patterns
-	existing := ".runtime/\n.claude/\n.logs/\n__pycache__/\n"
+	existing := ".runtime/\n.claude/\n.logs/\n__pycache__/\nstate.json\n"
 	if err := os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte(existing), 0644); err != nil {
 		t.Fatalf("Failed to create .gitignore: %v", err)
 	}
