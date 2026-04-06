@@ -96,6 +96,12 @@ type TownSettings struct {
 	// Values: "standard", "economy", "budget", or empty for custom configs.
 	CostTier string `json:"cost_tier,omitempty"`
 
+	// SmartRouting configures automatic model selection at sling time.
+	// When enabled, gt sling evaluates bead complexity and selects an appropriate
+	// model tier, escalating on refinery rejection. Requires OTel for data-driven
+	// routing; falls back to static heuristics when VictoriaMetrics is unavailable.
+	SmartRouting *SmartRoutingConfig `json:"smart_routing,omitempty"`
+
 	// Scheduler configures the capacity scheduler for polecat dispatch.
 	Scheduler *capacity.SchedulerConfig `json:"scheduler,omitempty"`
 
@@ -490,6 +496,69 @@ type ConvoyConfig struct {
 	// NotifyOnComplete controls whether convoy completion pushes a notification
 	// into the active Mayor session (in addition to mail). Opt-in; default false.
 	NotifyOnComplete bool `json:"notify_on_complete,omitempty"`
+}
+
+// SmartRoutingConfig configures automatic model selection at sling time.
+// See docs/design/otel/otel-smart-routing.md for full design.
+type SmartRoutingConfig struct {
+	// Enabled activates smart model routing at sling time. Default: false.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Strategy selects the routing algorithm. Routers are tried in the order
+	// listed; the first one that returns a non-empty decision wins. If all
+	// decline, the system falls back to role_agents.
+	//
+	// Built-in strategies:
+	//   "static"   — rule-based heuristic on task type × priority (default)
+	//   "history"  — query VictoriaMetrics for success rate by model × task_type
+	//   "classify" — call an LLM classifier to evaluate bead complexity
+	//   "chain"    — run multiple strategies in sequence (first match wins)
+	//
+	// The value can be a single name or a comma-separated chain:
+	//   "history,static"   — try history first, fall back to static
+	//   "classify,static"  — try classifier first, fall back to static
+	//
+	// Default: "static"
+	Strategy string `json:"strategy,omitempty"`
+
+	// SuccessThreshold is the minimum success rate (0.0–1.0) for a cheap model
+	// to be selected for a task type based on historical data. Default: 0.85.
+	// Used by the "history" strategy.
+	SuccessThreshold float64 `json:"success_threshold,omitempty"`
+
+	// MinSamples is the minimum number of merge outcomes needed before
+	// history-based routing kicks in. Below this, the strategy declines
+	// and the next one in the chain is tried. Default: 20.
+	// Used by the "history" strategy.
+	MinSamples int `json:"min_samples,omitempty"`
+
+	// MaxAttempts is the maximum number of times a bead can be attempted before
+	// it is left open with label gt:needs-human. Default: 3.
+	MaxAttempts int `json:"max_attempts,omitempty"`
+
+	// ClassifyModel is the model to use for LLM-based complexity classification.
+	// Should be a cheap/fast model since it runs at sling time.
+	// Default: "claude-haiku" (via role_agents["classifier"] if set).
+	// Used by the "classify" strategy.
+	ClassifyModel string `json:"classify_model,omitempty"`
+
+	// ClassifyPrompt is an optional custom system prompt for the classifier.
+	// If empty, a built-in prompt is used. The prompt receives the bead title,
+	// description, type, and priority as input and must output a JSON object
+	// with fields: {"tier": "cheap"|"capable"|"escalated", "confidence": 0.0-1.0, "reason": "..."}.
+	// Used by the "classify" strategy.
+	ClassifyPrompt string `json:"classify_prompt,omitempty"`
+}
+
+// SmartRoutingDefaults returns a SmartRoutingConfig with default values.
+func SmartRoutingDefaults() SmartRoutingConfig {
+	return SmartRoutingConfig{
+		Enabled:          false,
+		Strategy:         "static",
+		SuccessThreshold: 0.85,
+		MinSamples:       20,
+		MaxAttempts:      3,
+	}
 }
 
 // ParseDurationOrDefault parses a Go duration string, returning fallback on error or empty input.

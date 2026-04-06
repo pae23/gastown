@@ -102,9 +102,13 @@ type recorderInstruments struct {
 	molSquashTotal        metric.Int64Counter
 	molBurnTotal          metric.Int64Counter
 	beadCreateTotal       metric.Int64Counter
+	testRunTotal          metric.Int64Counter
+	mergeOutcomeTotal     metric.Int64Counter
+	modelSelectTotal      metric.Int64Counter
 
 	// Histograms
-	bdDurationHist metric.Float64Histogram
+	bdDurationHist      metric.Float64Histogram
+	mergeDurationHist   metric.Float64Histogram
 }
 
 var (
@@ -216,10 +220,23 @@ func initInstruments() {
 		inst.beadCreateTotal, _ = m.Int64Counter("gastown.bead.creates.total",
 			metric.WithDescription("Total bead creations from molecule instantiation"),
 		)
+		inst.testRunTotal, _ = m.Int64Counter("gastown.refinery.test_runs.total",
+			metric.WithDescription("Total refinery test suite executions"),
+		)
+		inst.mergeOutcomeTotal, _ = m.Int64Counter("gastown.refinery.merge_outcomes.total",
+			metric.WithDescription("Total refinery merge request outcomes"),
+		)
+		inst.modelSelectTotal, _ = m.Int64Counter("gastown.sling.model_selections.total",
+			metric.WithDescription("Total smart model routing selections at sling time"),
+		)
 
 		// Histograms
 		inst.bdDurationHist, _ = m.Float64Histogram("gastown.bd.duration_ms",
 			metric.WithDescription("bd CLI call round-trip latency in milliseconds"),
+			metric.WithUnit("ms"),
+		)
+		inst.mergeDurationHist, _ = m.Float64Histogram("gastown.refinery.merge_duration_ms",
+			metric.WithDescription("Merge request duration from creation to close in milliseconds"),
 			metric.WithUnit("ms"),
 		)
 	})
@@ -830,4 +847,147 @@ func RecordAgentEvent(ctx context.Context, sessionID, agentType, eventType, role
 	)
 	addRunID(ctx, &r)
 	logger.Emit(ctx, r)
+}
+
+// ---------------------------------------------------------------------------
+// Smart model routing events (see docs/design/otel/otel-smart-routing.md)
+// ---------------------------------------------------------------------------
+
+// TestRunInfo carries metadata for a refinery test suite execution.
+type TestRunInfo struct {
+	MRID           string  // merge request bead ID
+	SourceBead     string  // original work bead ID
+	Branch         string  // source branch
+	Agent          string  // agent alias used by the polecat (e.g. "claude-sonnet")
+	Model          string  // resolved model ID (e.g. "claude-sonnet-4-6")
+	Suite          string  // test suite name or command (e.g. "go test ./...")
+	Result         string  // "pass", "fail", "error", "skip"
+	DurationMs     float64 // wall-clock time of the test run
+	FailureSummary string  // first 1024 chars of failure output; empty on pass
+	IsPreexisting  bool    // true if the failure also exists on the target branch
+}
+
+// RecordTestRun records a refinery test suite execution (metrics + log event).
+// Emitted after each quality gate run on a branch before merge.
+func RecordTestRun(ctx context.Context, info TestRunInfo, err error) {
+	initInstruments()
+	status := statusStr(err)
+	inst.testRunTotal.Add(ctx, 1,
+		metric.WithAttributes(
+			attribute.String("result", info.Result),
+			attribute.String("agent", info.Agent),
+			attribute.String("status", status),
+		),
+	)
+	emit(ctx, "refinery.test_run", severity(err),
+		otellog.String("mr_id", info.MRID),
+		otellog.String("source_bead", info.SourceBead),
+		otellog.String("branch", info.Branch),
+		otellog.String("agent", info.Agent),
+		otellog.String("model", info.Model),
+		otellog.String("suite", info.Suite),
+		otellog.String("result", info.Result),
+		otellog.Float64("duration_ms", info.DurationMs),
+		otellog.String("failure_summary", truncateOutput(info.FailureSummary, 1024)),
+		otellog.Bool("is_preexisting", info.IsPreexisting),
+		otellog.String("status", status),
+		errKV(err),
+	)
+}
+
+// MergeOutcomeInfo carries metadata for a refinery merge request terminal state.
+type MergeOutcomeInfo struct {
+	MRID         string  // merge request bead ID
+	SourceBead   string  // original work bead ID
+	Branch       string  // source branch
+	Target       string  // target branch ("main", "integration/...")
+	Agent        string  // agent alias used by the polecat
+	Model        string  // resolved model ID
+	Rig          string  // rig where the work was done
+	Outcome      string  // "merged", "rejected", "conflict", "superseded"
+	RejectReason string  // "test_failure", "build_failure", "conflict", ""
+	AttemptCount int     // number of times this bead was attempted (1 = first try)
+	TaskType     string  // bead type ("bug", "feature", "task", "chore")
+	TaskPriority int     // bead priority (0–4)
+	DurationMs   float64 // wall-clock from MR creation to close
+}
+
+// RecordMergeOutcome records a refinery merge request terminal state (metrics + log event).
+// Emitted once per MR close — merged, rejected, conflict, or superseded.
+func RecordMergeOutcome(ctx context.Context, info MergeOutcomeInfo, err error) {
+	initInstruments()
+	status := statusStr(err)
+	attrs := metric.WithAttributes(
+		attribute.String("outcome", info.Outcome),
+		attribute.String("agent", info.Agent),
+		attribute.String("task_type", info.TaskType),
+		attribute.String("task_priority", strconv.Itoa(info.TaskPriority)),
+	)
+	inst.mergeOutcomeTotal.Add(ctx, 1, attrs)
+	inst.mergeDurationHist.Record(ctx, info.DurationMs,
+		metric.WithAttributes(
+			attribute.String("outcome", info.Outcome),
+			attribute.String("agent", info.Agent),
+		),
+	)
+	emit(ctx, "refinery.merge_outcome", severity(err),
+		otellog.String("mr_id", info.MRID),
+		otellog.String("source_bead", info.SourceBead),
+		otellog.String("branch", info.Branch),
+		otellog.String("target", info.Target),
+		otellog.String("agent", info.Agent),
+		otellog.String("model", info.Model),
+		otellog.String("rig", info.Rig),
+		otellog.String("outcome", info.Outcome),
+		otellog.String("reject_reason", info.RejectReason),
+		otellog.Int64("attempt_count", int64(info.AttemptCount)),
+		otellog.String("task_type", info.TaskType),
+		otellog.Int64("task_priority", int64(info.TaskPriority)),
+		otellog.Float64("duration_ms", info.DurationMs),
+		otellog.String("status", status),
+		errKV(err),
+	)
+}
+
+// ModelSelectInfo carries metadata for a smart model routing decision at sling time.
+type ModelSelectInfo struct {
+	Bead            string  // bead ID being slung
+	Target          string  // target rig
+	TaskType        string  // bead type
+	TaskPriority    int     // bead priority (0–4)
+	SelectedAgent   string  // agent alias chosen
+	SelectedModel   string  // resolved model ID
+	SelectionReason string  // "heuristic", "history", "escalation", "override", "default"
+	AttemptCount    int     // attempt number (1 = first try, 2+ = escalation)
+	Confidence      float64 // routing confidence 0.0–1.0 (from historical success rate)
+	FallbackAgent   string  // next agent if this one fails; empty if already at top tier
+}
+
+// RecordModelSelect records a smart model routing decision at sling time (metrics + log event).
+// Emitted by gt sling when smart routing is active. When smart routing is off,
+// this is not called — the existing RecordSling covers the dispatch.
+func RecordModelSelect(ctx context.Context, info ModelSelectInfo, err error) {
+	initInstruments()
+	status := statusStr(err)
+	inst.modelSelectTotal.Add(ctx, 1,
+		metric.WithAttributes(
+			attribute.String("selected_agent", info.SelectedAgent),
+			attribute.String("selection_reason", info.SelectionReason),
+			attribute.String("task_type", info.TaskType),
+		),
+	)
+	emit(ctx, "sling.model_select", severity(err),
+		otellog.String("bead", info.Bead),
+		otellog.String("target", info.Target),
+		otellog.String("task_type", info.TaskType),
+		otellog.Int64("task_priority", int64(info.TaskPriority)),
+		otellog.String("selected_agent", info.SelectedAgent),
+		otellog.String("selected_model", info.SelectedModel),
+		otellog.String("selection_reason", info.SelectionReason),
+		otellog.Int64("attempt_count", int64(info.AttemptCount)),
+		otellog.Float64("confidence", info.Confidence),
+		otellog.String("fallback_agent", info.FallbackAgent),
+		otellog.String("status", status),
+		errKV(err),
+	)
 }

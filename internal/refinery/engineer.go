@@ -23,6 +23,7 @@ import (
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/rig"
+	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/util"
 )
 
@@ -263,6 +264,13 @@ type Engineer struct {
 	mergeSlotRelease      func(holder string) error
 	mergeSlotMaxRetries   int           // Max retries for slot acquisition (0 = no retry)
 	mergeSlotRetryBackoff time.Duration // Initial backoff between retries
+
+	// Current MR context for telemetry — set by ProcessMRInfo, read by runTests/runGate.
+	currentMRID        string
+	currentSourceIssue string
+	currentBranch      string
+	currentAgent       string // agent alias used by the polecat
+	currentModel       string // resolved model ID
 }
 
 // NewEngineer creates a new Engineer for the given rig.
@@ -897,6 +905,99 @@ func (e *Engineer) runTests(ctx context.Context) ProcessResult {
 	}
 }
 
+// recordTestRunTelemetry emits a refinery.test_run OTel event for the current MR context.
+// mr fields are read from the engineer's current merge context.
+func (e *Engineer) recordTestRunTelemetry(ctx context.Context, suite, result string, durationMs float64, failureSummary string, isPreexisting bool) {
+	telemetry.RecordTestRun(ctx, telemetry.TestRunInfo{
+		MRID:           e.currentMRID,
+		SourceBead:     e.currentSourceIssue,
+		Branch:         e.currentBranch,
+		Agent:          e.currentAgent,
+		Model:          e.currentModel,
+		Suite:          suite,
+		Result:         result,
+		DurationMs:     durationMs,
+		FailureSummary: failureSummary,
+		IsPreexisting:  isPreexisting,
+	}, nil)
+}
+
+// emitMergeOutcome emits a refinery.merge_outcome OTel event.
+func (e *Engineer) emitMergeOutcome(ctx context.Context, mr *MRInfo, outcome, rejectReason string, result ProcessResult) {
+	var taskType string
+	var taskPriority int
+	var attemptCount int
+	if mr.SourceIssue != "" {
+		if srcIssue, err := e.beads.Show(mr.SourceIssue); err == nil {
+			taskType = srcIssue.Type
+			taskPriority = srcIssue.Priority
+			if countStr := descField(srcIssue.Description, "attempt_count"); countStr != "" {
+				fmt.Sscanf(countStr, "%d", &attemptCount)
+			}
+		}
+	}
+	durationMs := float64(time.Since(mr.CreatedAt).Milliseconds())
+	telemetry.RecordMergeOutcome(ctx, telemetry.MergeOutcomeInfo{
+		MRID:         mr.ID,
+		SourceBead:   mr.SourceIssue,
+		Branch:       mr.Branch,
+		Target:       mr.Target,
+		Agent:        e.currentAgent,
+		Model:        e.currentModel,
+		Rig:          mr.Rig,
+		Outcome:      outcome,
+		RejectReason: rejectReason,
+		AttemptCount: attemptCount,
+		TaskType:     taskType,
+		TaskPriority: taskPriority,
+		DurationMs:   durationMs,
+	}, nil)
+}
+
+// incrementBeadAttemptCount increments the attempt_count custom field on a bead
+// and records the last_agent used. These fields drive smart routing escalation.
+func (e *Engineer) incrementBeadAttemptCount(beadID string) {
+	issue, err := e.beads.Show(beadID)
+	if err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: could not read bead %s for attempt_count: %v\n", beadID, err)
+		return
+	}
+	currentCount := 0
+	if countStr := descField(issue.Description, "attempt_count"); countStr != "" {
+		fmt.Sscanf(countStr, "%d", &currentCount)
+	}
+	newCount := currentCount + 1
+
+	// Update attempt_count and last_agent via bd CLI (custom fields).
+	updateCmd := exec.Command("bd", "update", beadID,
+		"--field", fmt.Sprintf("attempt_count=%d", newCount),
+		"--field", fmt.Sprintf("last_agent=%s", e.currentAgent),
+	)
+	updateCmd.Dir = e.workDir
+	if err := updateCmd.Run(); err != nil {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to update attempt_count on %s: %v\n", beadID, err)
+	} else {
+		_, _ = fmt.Fprintf(e.output, "[Engineer] Updated %s: attempt_count=%d last_agent=%s\n", beadID, newCount, e.currentAgent)
+	}
+}
+
+// descField extracts a "key: value" field from an issue description.
+// Returns empty string if the field is not found.
+func descField(description, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(description, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+		// Also check with dash prefix (markdown list item)
+		if strings.HasPrefix(line, "- "+prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, "- "+prefix))
+		}
+	}
+	return ""
+}
+
 // runGate executes a single quality gate command and returns the result.
 func (e *Engineer) runGate(ctx context.Context, name string, gate *GateConfig) GateResult {
 	start := time.Now()
@@ -929,6 +1030,7 @@ func (e *Engineer) runGate(ctx context.Context, name string, gate *GateConfig) G
 	elapsed := time.Since(start)
 
 	if err == nil {
+		e.recordTestRunTelemetry(ctx, name, "pass", float64(elapsed.Milliseconds()), "", false)
 		return GateResult{
 			Name:    name,
 			Success: true,
@@ -948,6 +1050,7 @@ func (e *Engineer) runGate(ctx context.Context, name string, gate *GateConfig) G
 		errMsg = fmt.Sprintf("%s: %s", errMsg, stderrStr)
 	}
 
+	e.recordTestRunTelemetry(ctx, name, "fail", float64(elapsed.Milliseconds()), errMsg, false)
 	return GateResult{
 		Name:    name,
 		Success: false,
@@ -1073,6 +1176,17 @@ func (e *Engineer) syncCrewWorkspaces() {
 
 // ProcessMRInfo processes a merge request from MRInfo.
 func (e *Engineer) ProcessMRInfo(ctx context.Context, mr *MRInfo) ProcessResult {
+	// Set current MR context for telemetry (used by runTests/runGate).
+	e.currentMRID = mr.ID
+	e.currentSourceIssue = mr.SourceIssue
+	e.currentBranch = mr.Branch
+	// Agent/model come from the source issue's last_agent field if available.
+	if mr.SourceIssue != "" {
+		if srcIssue, err := e.beads.Show(mr.SourceIssue); err == nil {
+			e.currentAgent = descField(srcIssue.Description, "last_agent")
+		}
+	}
+
 	// MR fields are directly on the struct
 	_, _ = fmt.Fprintln(e.output, "[Engineer] Processing MR:")
 	_, _ = fmt.Fprintf(e.output, "  Branch: %s\n", mr.Branch)
@@ -1214,7 +1328,10 @@ func (e *Engineer) HandleMRInfoSuccess(mr *MRInfo, result ProcessResult) {
 		_, _ = fmt.Fprintf(e.output, "[Engineer] Warning: failed to nudge mayor about merge: %v\n", err)
 	}
 
-	// 5. Log success
+	// 5. Emit merge outcome telemetry
+	e.emitMergeOutcome(context.Background(), mr, "merged", "", result)
+
+	// 6. Log success
 	_, _ = fmt.Fprintf(e.output, "[Engineer] ✓ Merged: %s (commit: %s)\n", mr.ID, result.MergeCommit)
 }
 
@@ -1273,6 +1390,13 @@ func (e *Engineer) HandleMRInfoFailure(mr *MRInfo, result ProcessResult) {
 	} else if result.TestsFailed {
 		failureType = "tests"
 	}
+
+	// Emit merge outcome telemetry and update attempt_count/last_agent on the source bead.
+	e.emitMergeOutcome(context.Background(), mr, "rejected", failureType, result)
+	if mr.SourceIssue != "" {
+		e.incrementBeadAttemptCount(mr.SourceIssue)
+	}
+
 	polecatName := strings.TrimPrefix(mr.Worker, "polecats/")
 	nudgeTarget := fmt.Sprintf("%s/%s", e.rig.Name, polecatName)
 	nudgeMsg := fmt.Sprintf("MERGE_FAILED: branch=%s issue=%s type=%s error=%s — fix and resubmit with 'gt done'",

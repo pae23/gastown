@@ -41,6 +41,9 @@ Complete schema of all telemetry events emitted by Gas Town. Each event consists
 | `mol.squash` | Molecule | ❌ Roadmap |
 | `mol.burn` | Molecule | ❌ Roadmap |
 | `bead.create` | Molecule | ❌ Roadmap |
+| `refinery.test_run` | Refinery | ✅ Main |
+| `refinery.merge_outcome` | Refinery | ✅ Main |
+| `sling.model_select` | Sling | ✅ Main |
 
 ---
 
@@ -267,6 +270,74 @@ All carry `status` and `error` fields.
 
 ---
 
+### `refinery.test_run`
+
+Emitted by the Refinery after running quality gates on a branch before merge.
+One event per test suite invocation.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `mr_id` | string | merge request bead ID |
+| `source_bead` | string | original work bead ID |
+| `branch` | string | source branch |
+| `agent` | string | agent alias used by the polecat (e.g. `"claude-sonnet"`) |
+| `model` | string | resolved model ID (e.g. `"claude-sonnet-4-6"`) |
+| `suite` | string | test suite name or command (e.g. `"go test ./..."`) |
+| `result` | string | `"pass"` · `"fail"` · `"error"` · `"skip"` |
+| `duration_ms` | float | wall-clock time of the test run |
+| `failure_summary` | string | first 1024 chars of failure output; empty on pass |
+| `is_preexisting` | bool | `true` if the failure also exists on the target branch |
+| `status` | string | `"ok"` · `"error"` |
+| `error` | string | error message; empty when `"ok"` |
+
+---
+
+### `refinery.merge_outcome`
+
+Emitted by the Refinery when an MR reaches a terminal state. One event per MR close.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `mr_id` | string | merge request bead ID |
+| `source_bead` | string | original work bead ID |
+| `branch` | string | source branch |
+| `target` | string | target branch (`"main"`, `"integration/..."`) |
+| `agent` | string | agent alias used by the polecat |
+| `model` | string | resolved model ID |
+| `rig` | string | rig where the work was done |
+| `outcome` | string | `"merged"` · `"rejected"` · `"conflict"` · `"superseded"` |
+| `reject_reason` | string | `"test_failure"` · `"build_failure"` · `"conflict"` · `""` |
+| `attempt_count` | int | number of times this bead was attempted (1 = first try) |
+| `task_type` | string | bead type (`"bug"`, `"feature"`, `"task"`, `"chore"`) |
+| `task_priority` | int | bead priority (0–4) |
+| `duration_ms` | float | wall-clock from MR creation to close |
+| `status` | string | `"ok"` · `"error"` |
+| `error` | string | error message; empty when `"ok"` |
+
+---
+
+### `sling.model_select`
+
+Emitted by `gt sling` when smart routing is active. Records the model selection
+decision and reasoning.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `bead` | string | bead ID being slung |
+| `target` | string | target rig |
+| `task_type` | string | bead type |
+| `task_priority` | int | bead priority (0–4) |
+| `selected_agent` | string | agent alias chosen |
+| `selected_model` | string | resolved model ID |
+| `selection_reason` | string | `"heuristic"` · `"history"` · `"escalation"` · `"override"` · `"default"` |
+| `attempt_count` | int | attempt number (1 = first try, 2+ = escalation) |
+| `confidence` | float | routing confidence 0.0–1.0 (from historical success rate) |
+| `fallback_agent` | string | next agent if this one fails; empty if already at top tier |
+| `status` | string | `"ok"` · `"error"` |
+| `error` | string | error message; empty when `"ok"` |
+
+---
+
 ## 3. Roadmap Events (not yet implemented)
 
 The following events have no corresponding `Record*` function in `internal/telemetry/recorder.go`.
@@ -320,6 +391,10 @@ Per-child-bead event during molecule instantiation. No `RecordBeadCreate` functi
 | `gastown.formula.instantiations.total` | Counter | `status`, `formula` | ✅ Main |
 | `gastown.convoy.creates.total` | Counter | `status` | ✅ Main |
 | `gastown.agent.events.total` | Counter | `session`, `event_type`, `role` | 🔲 PR #2199 |
+| `gastown.refinery.test_runs.total` | Counter | `result`, `agent`, `status` | ✅ Main |
+| `gastown.refinery.merge_outcomes.total` | Counter | `outcome`, `agent`, `task_type`, `task_priority` | ✅ Main |
+| `gastown.refinery.merge_duration_ms` | Histogram | `outcome`, `agent` | ✅ Main |
+| `gastown.sling.model_selections.total` | Counter | `selected_agent`, `selection_reason`, `task_type` | ✅ Main |
 
 ---
 
@@ -327,7 +402,8 @@ Per-child-bead event during molecule instantiation. No `RecordBeadCreate` functi
 
 ```
 gt.role, gt.rig, gt.actor, gt.agent, session_id, event_type, subcommand,
-operation, new_state, exit_type
+operation, new_state, exit_type, agent, model, outcome, result,
+task_type, task_priority, attempt_count, selection_reason, suite
 ```
 
 ---

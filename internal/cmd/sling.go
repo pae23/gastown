@@ -649,6 +649,16 @@ func runSling(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
+	// Smart model routing: when no --agent override is specified and smart routing
+	// is enabled, auto-select a model tier based on bead complexity and history.
+	// Falls back to role_agents default when smart routing is off or OTel unavailable.
+	if slingAgent == "" {
+		selected := smartSelectAgent(ctx, beadID, info, townRoot)
+		if selected != "" {
+			slingAgent = selected
+		}
+	}
+
 	// TODO(scheduler-unify): Migrate single-sling rig dispatch to use executeSling().
 	// The inline logic below duplicates executeSling's 12-step flow. Batch sling
 	// and scheduler dispatch already use the unified path. Single-sling is deferred

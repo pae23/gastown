@@ -82,6 +82,15 @@ docker run -d -p 9428:9428 victoriametrics/victoria-logs
 | Formula instantiation telemetry | ✅ Main | `formula.instantiate` |
 | Convoy telemetry | ✅ Main | `convoy.create` events |
 
+### Refinery & Smart Routing
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Refinery test run telemetry | ✅ Main | `refinery.test_run` — `RecordTestRun` records quality gate results per suite |
+| Merge outcome telemetry | ✅ Main | `refinery.merge_outcome` — `RecordMergeOutcome` records MR terminal state with model/task metadata |
+| Merge duration histogram | ✅ Main | `gastown.refinery.merge_duration_ms` — MR creation to close |
+| Smart model selection telemetry | ✅ Main | `sling.model_select` — `RecordModelSelect` records routing decision and reasoning |
+
 ### Agent Events (PR #2199)
 
 | Feature | Status | Notes |
