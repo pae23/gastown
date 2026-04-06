@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/langfuse"
 	"github.com/steveyegge/gastown/internal/routing"
 	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/workspace"
@@ -101,6 +102,10 @@ func smartSelectAgent(ctx context.Context, beadID string, info *beadInfo, townRo
 		Confidence:      decision.Confidence,
 		FallbackAgent:   decision.FallbackAgent,
 	}, nil)
+
+	// Trace to Langfuse (no-op when GT_LANGFUSE_* not set).
+	langfuse.TraceRouting(beadID, input.TaskType, input.Priority,
+		attemptCount, decision.Agent, decision.Reason, decision.Confidence)
 
 	return decision.Agent
 }

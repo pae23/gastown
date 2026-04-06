@@ -21,6 +21,7 @@ import (
 	"github.com/steveyegge/gastown/internal/crew"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
+	"github.com/steveyegge/gastown/internal/langfuse"
 	"github.com/steveyegge/gastown/internal/mail"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/telemetry"
@@ -952,6 +953,9 @@ func (e *Engineer) emitMergeOutcome(ctx context.Context, mr *MRInfo, outcome, re
 		TaskPriority: taskPriority,
 		DurationMs:   durationMs,
 	}, nil)
+
+	// Score in Langfuse (no-op when GT_LANGFUSE_* not set).
+	langfuse.ScoreMergeOutcome(mr.SourceIssue, outcome, e.currentAgent, attemptCount)
 }
 
 // incrementBeadAttemptCount increments the attempt_count custom field on a bead
