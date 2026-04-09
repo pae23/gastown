@@ -8,6 +8,7 @@ import (
 
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/cli"
+	"github.com/steveyegge/gastown/internal/deacon"
 	"github.com/steveyegge/gastown/internal/style"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -210,6 +211,17 @@ func autoSpawnPatrol(cfg PatrolConfig) (string, error) {
 	// Without this, each patrol cycle leaks a root wisp into the DB, producing
 	// ~500-700 orphans/day across all patrol formulas (gt-92jh).
 	burnPreviousPatrolWisps(cfg)
+
+	// For deacon patrols, refresh heartbeat to signal liveness to the daemon.
+	// The daemon monitors deacon/heartbeat.json and kills the Deacon if it goes
+	// stale (>20 min without update). Refreshing here ensures liveness is signaled
+	// as soon as a new patrol cycle starts, rather than relying solely on the agent
+	// to manually run the heartbeat formula step.
+	if cfg.RoleName == "deacon" {
+		if err := deacon.TouchWithAction(cfg.BeadsDir, "starting patrol cycle", 0, 0); err != nil {
+			style.PrintWarning("failed to refresh deacon heartbeat: %v", err)
+		}
+	}
 
 	// Find the proto ID for the patrol molecule
 	cmdCatalog := exec.Command("gt", "formula", "list")
