@@ -794,6 +794,22 @@ func executeWorkflowFormula(f *formula.Formula, formulaName, targetRig string) e
 
 	fmt.Printf("%s Created workflow: %s\n", style.Bold.Render("✓"), workflowID)
 
+	// Parse --set vars for forwarding to slung steps (workflow parity with the
+	// convoy executor at formula.go:542). Vars reach each step bead via
+	// `gt sling --var`, which persists them in FormulaVars through
+	// sling_dispatch.go:359. Also recorded on the workflow root bead below so
+	// `gt prime` can surface them. See gt-lg0.
+	slingVarArgs := buildWorkflowSetVarArgs(formulaRunSet)
+
+	if len(formulaRunSet) > 0 {
+		if err := storeFieldsInBead(workflowID, beadFieldUpdates{
+			FormulaVars: strings.Join(formulaRunSet, "\n"),
+		}); err != nil {
+			fmt.Printf("%s could not record formula_vars on workflow %s: %v\n",
+				style.Dim.Render("Warning:"), workflowID, err)
+		}
+	}
+
 	// Step 2: Create step beads and wire dependencies
 	stepBeads := make(map[string]string) // step.ID -> bead ID
 
@@ -912,6 +928,7 @@ func executeWorkflowFormula(f *formula.Formula, formulaName, targetRig string) e
 		if stepAgent != "" {
 			slingArgs = append(slingArgs, "--agent", stepAgent)
 		}
+		slingArgs = append(slingArgs, slingVarArgs...)
 
 		slingCmd := exec.Command("gt", slingArgs...)
 		slingCmd.Stdout = os.Stdout
@@ -958,6 +975,23 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// buildWorkflowSetVarArgs expands `gt formula run --set k=v` pairs into the
+// `--var k=v` argv form consumed by `gt sling`. Used by executeWorkflowFormula
+// to forward run-time vars to each slung step bead. See gt-lg0.
+func buildWorkflowSetVarArgs(setArgs []string) []string {
+	if len(setArgs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(setArgs)*2)
+	for _, kv := range setArgs {
+		if kv == "" {
+			continue
+		}
+		out = append(out, "--var", kv)
+	}
+	return out
 }
 
 // parseSetVars parses --set key=value pairs into a map for template rendering.
