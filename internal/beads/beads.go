@@ -16,6 +16,7 @@ import (
 	"time"
 
 	beadsdk "github.com/steveyegge/beads"
+	gtlock "github.com/steveyegge/gastown/internal/lock"
 	"github.com/steveyegge/gastown/internal/runtime"
 	"github.com/steveyegge/gastown/internal/telemetry"
 	"github.com/steveyegge/gastown/internal/util"
@@ -555,6 +556,11 @@ func (b *Beads) runWithStdin(stdinData []byte, args ...string) (_ []byte, retErr
 	// causing all JSON parsing to fail. Inject --flat before --allow-stale prepend
 	// (which changes args[0] from "list" to "--allow-stale").
 	args = InjectFlatForListJSON(args)
+	if shouldThrottleBDRead(args) {
+		if unlock, err := b.acquireBDReadThrottle(); err == nil && unlock != nil {
+			defer unlock()
+		}
+	}
 
 	// Conditionally use --allow-stale to prevent failures when db is temporarily stale
 	// (e.g., after daemon is killed during shutdown). Only if bd supports it.
@@ -623,6 +629,28 @@ func (b *Beads) runWithStdin(stdinData []byte, args ...string) (_ []byte, retErr
 	}
 
 	return stripStdoutWarnings(stdout.Bytes()), nil
+}
+
+func shouldThrottleBDRead(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg == "list"
+	}
+	return false
+}
+
+func (b *Beads) acquireBDReadThrottle() (func(), error) {
+	townRoot := b.getTownRoot()
+	if townRoot == "" {
+		return nil, nil
+	}
+	lockDir := filepath.Join(townRoot, ".runtime")
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, err
+	}
+	return gtlock.FlockAcquire(filepath.Join(lockDir, "bd-list-read.flock"))
 }
 
 // runWithRouting executes a bd command without setting BEADS_DIR, allowing bd's
