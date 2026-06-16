@@ -105,7 +105,7 @@ func TestRunSlingFormulaSerializesWholeDogPool(t *testing.T) {
 func TestRunSlingFormulaExistingHookedDogStartsDelayedSession(t *testing.T) {
 	body := runSlingFormulaSourceForTest(t)
 
-	existingIdx := strings.Index(body, "existing != nil && !slingForce")
+	existingIdx := strings.Index(body, "shouldReuseExistingFormula(existing, delayedDogInfo, slingForce)")
 	if existingIdx == -1 {
 		t.Fatal("existing hooked formula no-op block not found")
 	}
