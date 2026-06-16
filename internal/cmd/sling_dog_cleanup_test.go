@@ -126,7 +126,8 @@ func TestReusableHookedDogFormulaSkipsStaleDogHooks(t *testing.T) {
 		{ID: "missing-dog", Assignee: "deacon/dogs/missing", Description: "attached_formula: mol-dog-reaper"},
 		{ID: "wrong-work", Assignee: "deacon/dogs/beta", Description: "attached_formula: mol-dog-reaper"},
 		{ID: "wrong-formula", Assignee: "deacon/dogs/alpha", Description: "attached_formula: mol-dog-backup"},
-		{ID: "live-match", Assignee: "deacon/dogs/alpha", Description: "attached_formula: mol-dog-reaper"},
+		{ID: "older-live-match", Assignee: "deacon/dogs/alpha", Description: "attached_formula: mol-dog-reaper\nattached_at: 2026-06-16T20:30:15Z"},
+		{ID: "live-match", Assignee: "deacon/dogs/alpha", Description: "attached_formula: mol-dog-reaper\nattached_at: 2026-06-16T20:30:16Z"},
 	}
 
 	bead, dogName := reusableHookedDogFormula(hooked, "mol-dog-reaper", func(_ *beads.Issue, candidate string) bool {
@@ -139,6 +140,20 @@ func TestReusableHookedDogFormulaSkipsStaleDogHooks(t *testing.T) {
 	bead, dogName = reusableHookedDogFormula(hooked, "mol-dog-reaper", func(*beads.Issue, string) bool { return false })
 	if bead != nil || dogName != "" {
 		t.Fatalf("reusableHookedDogFormula() with no live dog = (%v, %q), want nil", bead, dogName)
+	}
+}
+
+func TestNewestHookedFormulaPrefersLatestAttachedAt(t *testing.T) {
+	hooked := []*beads.Issue{
+		{ID: "stale", Description: "attached_formula: mol-dog-reaper\nattached_at: 2026-06-16T20:30:15Z"},
+		{ID: "undated", Description: "attached_formula: mol-dog-reaper"},
+		{ID: "other", Description: "attached_formula: mol-dog-backup\nattached_at: 2026-06-16T20:30:17Z"},
+		{ID: "fresh", Description: "attached_formula: mol-dog-reaper\nattached_at: 2026-06-16T20:30:16Z"},
+	}
+
+	got := newestHookedFormula(hooked, "mol-dog-reaper")
+	if got == nil || got.ID != "fresh" {
+		t.Fatalf("newestHookedFormula() = %v, want fresh", got)
 	}
 }
 

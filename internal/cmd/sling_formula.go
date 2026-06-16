@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/cli"
@@ -133,14 +134,26 @@ func findHookedFormulaSingleton(workDir, targetAgent, formulaName string) (*bead
 		return nil, err
 	}
 
+	return newestHookedFormula(hookedBeads, formulaName), nil
+}
+
+func newestHookedFormula(hookedBeads []*beads.Issue, formulaName string) *beads.Issue {
+	var newest *beads.Issue
+	var newestAt time.Time
+	var newestHasAt bool
 	for _, bead := range hookedBeads {
 		fields := beads.ParseAttachmentFields(bead)
-		if fields != nil && fields.AttachedFormula == formulaName {
-			return bead, nil
+		if fields == nil || fields.AttachedFormula != formulaName {
+			continue
+		}
+		attachedAt, hasAttachedAt := attachmentTime(fields)
+		if newerAttachment(newest == nil, attachedAt, hasAttachedAt, newestAt, newestHasAt) {
+			newest = bead
+			newestAt = attachedAt
+			newestHasAt = hasAttachedAt
 		}
 	}
-
-	return nil, nil
+	return newest
 }
 
 var findHookedFormulaSingletonFn = findHookedFormulaSingleton
@@ -167,6 +180,10 @@ func findHookedFormulaForDogPool(workDir, formulaName string, reusableDog func(*
 
 func reusableHookedDogFormula(hookedBeads []*beads.Issue, formulaName string, reusableDog func(*beads.Issue, string) bool) (*beads.Issue, string) {
 	const dogAssigneePrefix = "deacon/dogs/"
+	var newest *beads.Issue
+	var newestDogName string
+	var newestAt time.Time
+	var newestHasAt bool
 	for _, bead := range hookedBeads {
 		if !strings.HasPrefix(bead.Assignee, dogAssigneePrefix) {
 			continue
@@ -182,10 +199,37 @@ func reusableHookedDogFormula(hookedBeads []*beads.Issue, formulaName string, re
 		if reusableDog != nil && !reusableDog(bead, dogName) {
 			continue
 		}
-		return bead, dogName
+		attachedAt, hasAttachedAt := attachmentTime(fields)
+		if newerAttachment(newest == nil, attachedAt, hasAttachedAt, newestAt, newestHasAt) {
+			newest = bead
+			newestDogName = dogName
+			newestAt = attachedAt
+			newestHasAt = hasAttachedAt
+		}
 	}
 
-	return nil, ""
+	return newest, newestDogName
+}
+
+func attachmentTime(fields *beads.AttachmentFields) (time.Time, bool) {
+	if fields == nil || fields.AttachedAt == "" {
+		return time.Time{}, false
+	}
+	attachedAt, err := time.Parse(time.RFC3339Nano, fields.AttachedAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return attachedAt, true
+}
+
+func newerAttachment(noCurrent bool, candidate time.Time, candidateOK bool, current time.Time, currentOK bool) bool {
+	if noCurrent {
+		return true
+	}
+	if candidateOK != currentOK {
+		return candidateOK
+	}
+	return candidateOK && candidate.After(current)
 }
 
 func shouldReuseExistingFormula(existing *beads.Issue, delayedDogInfo *DogDispatchInfo, force bool) bool {
