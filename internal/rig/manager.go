@@ -625,8 +625,7 @@ func (m *Manager) AddRig(opts AddRigOptions) (*Rig, error) {
 			// Always pass --server-port so bd connects to gt's central Dolt
 			// server. Without this, bd auto-starts its own server on a random
 			// port, causing "database not found" errors. (GH #2405)
-			doltCfg := doltserver.DefaultConfig(m.townRoot)
-			initArgs = append(initArgs, "--server-port", strconv.Itoa(doltCfg.Port))
+			initArgs = append(initArgs, "--server-port", strconv.Itoa(bdInitServerPort(m.townRoot)))
 			// If the cloned repo's config.yaml has sync.remote, bd init blocks
 			// waiting for interactive confirmation (stdin is /dev/null here).
 			// Pass explicit flags to bypass the safety check. (GH #3873)
@@ -1173,8 +1172,7 @@ func (m *Manager) InitBeads(rigPath, prefix, rigName string) error {
 	initArgs = append(initArgs, "--server")
 	// Always pass --server-port so bd connects to gt's central Dolt server.
 	// Without this, bd auto-starts its own server on a random port. (GH #2405)
-	doltCfg := doltserver.DefaultConfig(m.townRoot)
-	initArgs = append(initArgs, "--server-port", strconv.Itoa(doltCfg.Port))
+	initArgs = append(initArgs, "--server-port", strconv.Itoa(bdInitServerPort(m.townRoot)))
 	// --force ensures bd 1.0+ persists issue_prefix on existing server-side DBs.
 	initArgs = append(initArgs, "--force")
 	cmd := exec.Command("bd", initArgs...)
@@ -1459,12 +1457,23 @@ func isValidBeadsPrefix(prefix string) bool {
 }
 
 func bdSubprocessEnv(beadsDir, database string) []string {
-	env := beads.BuildMutationPinnedBDEnv(os.Environ(), beadsDir)
+	base := os.Environ()
+	if townRoot := beads.FindTownRoot(filepath.Dir(beads.ResolveBeadsDir(beadsDir))); townRoot != "" {
+		base = config.NormalizeConfiguredDoltEnv(base, townRoot)
+	}
+	env := beads.BuildMutationPinnedBDEnv(base, beadsDir)
 	if database != "" {
 		env = beads.StripEnvKey(env, "BEADS_DOLT_SERVER_DATABASE")
 		env = append(env, "BEADS_DOLT_SERVER_DATABASE="+database)
 	}
 	return env
+}
+
+func bdInitServerPort(townRoot string) int {
+	if port := config.ResolveConfiguredDoltPort(townRoot); port > 0 {
+		return port
+	}
+	return doltserver.DefaultPort
 }
 
 // isStandardBeadHash checks if a string looks like a standard 5-char bead hash.

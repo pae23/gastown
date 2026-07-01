@@ -448,7 +448,7 @@ func ResolveDoltPort(townRoot string) int {
 //  3. mayor/daemon.json env.GT_DOLT_PORT
 //  4. 0 (caller should use its default)
 func ResolveConfiguredDoltPort(townRoot string) int {
-	if port := resolveDoltPortFromConfigYAML(townRoot); port > 0 {
+	if _, port, ok := ManagedDoltEndpoint(townRoot); ok {
 		return port
 	}
 	if port := resolveDoltPortFromEnv(); port > 0 {
@@ -470,13 +470,60 @@ func ResolveConfiguredDoltPort(townRoot string) int {
 //  3. mayor/daemon.json env.GT_DOLT_HOST
 //  4. "" (caller should use its default)
 func ResolveConfiguredDoltHost(townRoot string) string {
-	if host := resolveDoltHostFromConfigYAML(townRoot); host != "" {
+	if host, _, ok := ManagedDoltEndpoint(townRoot); ok {
 		return host
 	}
 	if host := strings.TrimSpace(os.Getenv("GT_DOLT_HOST")); host != "" {
 		return host
 	}
 	return resolveDoltHostFromDaemonJSON(townRoot)
+}
+
+// ManagedDoltEndpoint reads the target town's managed Dolt config.yaml without
+// falling back to ambient environment. The boolean reports whether the managed
+// config exists and is not disabled by GT_DOLT_IGNORE_CONFIG.
+func ManagedDoltEndpoint(townRoot string) (host string, port int, ok bool) {
+	if townRoot == "" || os.Getenv("GT_DOLT_IGNORE_CONFIG") == "1" {
+		return "", 0, false
+	}
+	configPath := filepath.Join(townRoot, ".dolt-data", "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", 0, false
+	}
+	return parseHostFromConfigYAML(data), parsePortFromConfigYAML(data), true
+}
+
+// NormalizeConfiguredDoltEnv strips inherited Dolt endpoint env at target-town
+// boundaries and injects the target town's managed endpoint when present.
+func NormalizeConfiguredDoltEnv(base []string, townRoot string) []string {
+	host, port, ok := ManagedDoltEndpoint(townRoot)
+	if !ok {
+		return base
+	}
+	base = stripDoltEndpointEnv(base)
+	if host != "" {
+		base = append(base, "GT_DOLT_HOST="+host)
+	}
+	if port > 0 {
+		base = append(base, "GT_DOLT_PORT="+strconv.Itoa(port))
+	}
+	return base
+}
+
+func stripDoltEndpointEnv(env []string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			switch key {
+			case "GT_DOLT_HOST", "GT_DOLT_PORT", "BEADS_DOLT_SERVER_HOST", "BEADS_DOLT_SERVER_PORT", "BEADS_DOLT_PORT":
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func resolveDoltPort(townRoot string) int {

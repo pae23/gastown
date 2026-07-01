@@ -794,6 +794,7 @@ func initTownBeads(townPath string) error {
 func withBeadsDirEnv(beadsDir string) []string {
 	base := os.Environ()
 	if townRoot := beads.FindTownRoot(filepath.Dir(beads.ResolveBeadsDir(beadsDir))); townRoot != "" {
+		base = config.NormalizeConfiguredDoltEnv(base, townRoot)
 		if host := config.ResolveConfiguredDoltHost(townRoot); host != "" {
 			base = beads.StripEnvKey(base, "GT_DOLT_HOST")
 			base = append(base, "GT_DOLT_HOST="+host)
