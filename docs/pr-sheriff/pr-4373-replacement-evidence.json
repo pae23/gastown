@@ -40,6 +40,7 @@
   "repo_policy": {
     "label_aliases": [
       {"from": "status/reviewing", "to_family": "status", "to_value": "reviewing"},
+      {"from": "status/review-approved", "to_family": "status", "to_value": "review-approved"},
       {"from": "status/review-failed", "to_family": "status", "to_value": "review-failed"},
       {"from": "priority/p1", "to_family": "priority", "to_value": "p1"},
       {"from": "kind/bug", "to_family": "kind", "to_value": "bug"}
@@ -60,14 +61,14 @@
   },
   "labels": {
     "observed": [
-      {"name": "status/reviewing", "family": "status", "semantic_value": "reviewing", "subject": "replacement branch"},
+      {"name": "status/review-approved", "family": "status", "semantic_value": "review-approved", "subject": "replacement PR #4378"},
       {"name": "priority/p1", "family": "priority", "semantic_value": "p1", "subject": "PR #4373/#4347"},
       {"name": "kind/bug", "family": "kind", "semantic_value": "bug", "subject": "PR #4373/#4347"}
     ],
-    "status": "reviewing",
+    "status": "review-approved",
     "priority": "p1",
     "kind": "bug",
-    "snapshot_artifact_ref": "artifact-pr-metadata"
+    "snapshot_artifact_ref": "artifact-replacement-pr"
   },
   "artifacts": [
     {
@@ -165,18 +166,18 @@
       "kind": "github_pr_metadata",
       "uri": "https://github.com/gastownhall/gastown/pull/4378",
       "actor": "gh-pr-view",
-      "created_at": "2026-07-02T18:07:00Z",
-      "digest": "b691620d4c9df37585b966b45515fa926501ab32",
-      "summary": "Replacement PR #4378 is open, mergeable, labeled kind/bug priority/p1 status/reviewing, and based on current upstream/main."
+      "created_at": "2026-07-02T18:23:00Z",
+      "digest": "99b837e57370097a11ed99794aa0ebaeb37f2989",
+      "summary": "Replacement PR #4378 is open, clean/mergeable, labeled kind/bug priority/p1 status/review-approved, and based on current upstream/main."
     },
     {
-      "id": "artifact-ci-pending",
+      "id": "artifact-ci-final",
       "kind": "ci_log",
       "uri": "https://github.com/gastownhall/gastown/pull/4378/checks",
       "actor": "gh-pr-checks",
-      "created_at": "2026-07-02T18:07:00Z",
+      "created_at": "2026-07-02T18:23:00Z",
       "digest": null,
-      "summary": "Initial PR #4378 checks recorded: go.mod and issues.jsonl guards passed; Test, Lint, Integration Tests, Windows Smoke Test were still pending."
+      "summary": "Final PR #4378 checks recorded: Test, Lint, Integration Tests, Windows Smoke Test, Reject go.mod replace directives, and Reject issues.jsonl all passed."
     }
   ],
   "implementation": {
@@ -252,16 +253,16 @@
   },
   "verification": {
     "focused_checks": [
-      {"name": "CGO_ENABLED=0 go test ./internal/beads", "outcome": "pass", "artifact_ref": "artifact-focused-tests", "completed_at": "2026-07-02T18:23:00Z"},
-      {"name": "CGO_ENABLED=0 go test ./internal/cmd", "outcome": "pass", "artifact_ref": "artifact-focused-tests", "completed_at": "2026-07-02T18:25:00Z"}
+      {"name": "internal/beads", "command_or_check": "CGO_ENABLED=0 go test ./internal/beads", "outcome": "pass", "reason": "Focused package test for durable issue listing changes.", "artifact_ref": "artifact-focused-tests", "completed_at": "2026-07-02T18:23:00Z"},
+      {"name": "internal/cmd", "command_or_check": "CGO_ENABLED=0 go test ./internal/cmd", "outcome": "pass", "reason": "Focused package test for active-work lookup call-site changes.", "artifact_ref": "artifact-focused-tests", "completed_at": "2026-07-02T18:25:00Z"}
     ],
     "ci_checks": [
-      {"name": "Reject go.mod replace directives", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479541/job/84844752316", "artifact_ref": "artifact-ci-pending"},
-      {"name": "Reject issues.jsonl", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479541/job/84844752216", "artifact_ref": "artifact-ci-pending"},
-      {"name": "Test", "outcome": "pending", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479541/job/84844752277", "artifact_ref": "artifact-ci-pending"},
-      {"name": "Lint", "outcome": "pending", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479541/job/84844752239", "artifact_ref": "artifact-ci-pending"},
-      {"name": "Integration Tests", "outcome": "pending", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479541/job/84844752280", "artifact_ref": "artifact-ci-pending"},
-      {"name": "Windows Smoke Test", "outcome": "pending", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611479363/job/84844751866", "artifact_ref": "artifact-ci-pending"}
+      {"name": "Reject go.mod replace directives", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573881/job/84845077261", "artifact_ref": "artifact-ci-final"},
+      {"name": "Reject issues.jsonl", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573881/job/84845077248", "artifact_ref": "artifact-ci-final"},
+      {"name": "Test", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573881/job/84845077259", "artifact_ref": "artifact-ci-final"},
+      {"name": "Lint", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573881/job/84845077250", "artifact_ref": "artifact-ci-final"},
+      {"name": "Integration Tests", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573881/job/84845077229", "artifact_ref": "artifact-ci-final"},
+      {"name": "Windows Smoke Test", "outcome": "pass", "run_url": "https://github.com/gastownhall/gastown/actions/runs/28611573960/job/84845077536", "artifact_ref": "artifact-ci-final"}
     ]
   },
   "baseline_red_waiver": {
@@ -284,29 +285,29 @@
     "replacement_branch": "polecat/thunder/gt-pr-4373-clean-replacement-fix@4b3517",
     "replacement_commit_refs": ["b691620d4c9df37585b966b45515fa926501ab32"],
     "original_author": "Thalia-geraghty",
-    "evidence_reuse": {"reused_artifact_refs": ["artifact-pr-metadata", "artifact-pr-4347-metadata", "artifact-wip-delta"], "fresh_artifact_refs": ["artifact-current-code", "artifact-bead-notes", "artifact-replacement-pr", "artifact-ci-pending"], "rationale": "Reuse PR metadata and intent only; implementation is a fresh current-main port."},
+    "evidence_reuse": {"reused_artifact_refs": ["artifact-pr-metadata", "artifact-pr-4347-metadata", "artifact-wip-delta"], "fresh_artifact_refs": ["artifact-current-code", "artifact-bead-notes", "artifact-replacement-pr", "artifact-ci-final"], "rationale": "Reuse PR metadata and intent only; implementation is a fresh current-main port."},
     "attribution": {"required": true, "required_reason": "Replacement carries forward accepted contributor work from #4347/#4373.", "preserved": true, "method": "co_authored_by", "artifact_refs": ["artifact-pr-4347-metadata", "artifact-final-commit"]},
     "superseded_closure": {"required": true, "state": "deferred_until_replacement_merge", "closure_intent_ref": "artifact-bead-notes", "replacement_merge_ref": null, "closure_ref": null}
   },
   "blocker_scan": {
     "scanned_sources": ["labels", "pr_comments", "review_comments", "beads_notes", "ci_checks", "git_diff"],
-    "unresolved_blockers_found": true,
-    "blocker_refs": ["artifact-ci-pending"],
-    "resolution_refs": ["artifact-bead-notes", "artifact-replacement-pr"],
-    "scanned_at": "2026-07-02T18:15:00Z",
-    "summary": "Original PR blockers are avoided by this fresh current-main replacement branch. CI is still pending on #4378, so merge-path recommendation and original PR closure remain blocked until final CI evidence exists."
+    "unresolved_blockers_found": false,
+    "blocker_refs": [],
+    "resolution_refs": ["artifact-bead-notes", "artifact-replacement-pr", "artifact-ci-final"],
+    "scanned_at": "2026-07-02T18:24:00Z",
+    "summary": "Original PR blockers are avoided by this fresh current-main replacement branch. PR #4378 is clean/mergeable and all configured CI checks passed. Original #4347/#4373 closure remains deferred until replacement merge evidence exists."
   },
   "gates": [],
   "final": {
-    "verdict": "defer_human_review",
+    "verdict": "merge_replacement",
     "decision_valid": true,
-    "merge_path_allowed": false,
-    "blocking_gates": ["blocker_scan"],
+    "merge_path_allowed": true,
+    "blocking_gates": [],
     "target_change_url": "https://github.com/gastownhall/gastown/pull/4378",
     "target_head_sha": "b691620d4c9df37585b966b45515fa926501ab32",
     "decided_by": "gastown/polecats/thunder",
-    "decided_at": "2026-07-02T18:35:00Z",
-    "reason": "Implementation, focused local verification, post reviews, and replacement PR creation are complete. GitHub CI is still pending, so no merge-path recommendation or original PR closure is made yet.",
-    "required_actions": ["Wait for PR #4378 CI", "Record final GitHub CI", "Do not close #4347/#4373 until replacement merge evidence exists"]
+    "decided_at": "2026-07-02T18:36:00Z",
+    "reason": "Replacement PR #4378 carries the approved current-main active-work lookup convergence fix, preserves #4347/#4373 lineage, and has green focused local verification plus green GitHub CI. Original #4347/#4373 should remain open until replacement merge evidence exists.",
+    "required_actions": ["Merge replacement PR #4378", "After merge evidence exists, close #4347/#4373 as superseded if appropriate"]
   }
 }
