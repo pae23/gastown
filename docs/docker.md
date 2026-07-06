@@ -66,9 +66,9 @@ A single `apt-get install` adds the tooling Gas Town uses at runtime: `build-ess
 
 Go installs from the official tarball because the Debian-packaged version lags. The Go version is controlled by `ARG GO_VERSION` (currently `1.26.2`). The Dockerfile detects the host architecture at build time, which lets the same Dockerfile produce working images on amd64 and arm64. The architecture-detection change came from commit `ac4b65d1`.
 
-`bd` and `dolt` install via the upstream `curl | bash` install scripts. The scripts deposit binaries on `$PATH` for the `agent` user.
+`bd` and `dolt` install via the upstream `curl | bash` install scripts. In this image, the scripts place binaries in `/usr/local/bin`, which remains on `$PATH` for the `agent` user.
 
-`PATH` is set so `/app/gastown` (where the freshly-built `gt` binary lives) takes priority. `/usr/local/go/bin` and `/home/agent/go/bin` follow. The Dockerfile writes the same prefixes into `/etc/profile.d/gastown.sh` and `/etc/zsh/zshenv` so both bash and zsh interactive sessions see the right binaries.
+The image-level `ENV PATH` prepends `/app/gastown` (where the freshly built `gt` binary lives), `/usr/local/go/bin`, and `/home/agent/go/bin`. The shell profile snippets in `/etc/profile.d/gastown.sh` and `/etc/zsh/zshenv` only re-prepend `/app/gastown` so interactive bash and zsh sessions keep `/app/gastown/gt` ahead of any other `gt` without duplicating every image-level path entry.
 
 ### Building gt from source
 
