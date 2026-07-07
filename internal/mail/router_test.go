@@ -183,6 +183,9 @@ func TestAddressToSessionIDs(t *testing.T) {
 		{"mayor", []string{"hq-mayor"}},
 		{"mayor/", []string{"hq-mayor"}},
 		{"deacon", []string{"hq-deacon"}},
+		{"deacon/", []string{"hq-deacon"}},
+		{"deacon/dogs/alpha", []string{"hq-dog-alpha"}},
+		{"deacon/dogs/my-dog", []string{"hq-dog-my-dog"}},
 
 		// Rig singletons - single session (no crew/polecat ambiguity)
 		{"gastown/refinery", []string{"gt-refinery"}},
@@ -201,6 +204,14 @@ func TestAddressToSessionIDs(t *testing.T) {
 		{"gastown/", nil}, // Empty target
 		{"gastown", nil},  // No slash
 		{"", nil},         // Empty address
+		{"deacon/dogs", nil},
+		{"deacon/dogs/", nil},
+		{"deacon/dogs/alpha/extra", nil},
+		{"deacon/dogs/..", nil},
+		{"deacon/foo", nil},
+		{"deaconer", nil},
+		{"mayor/foo", nil},
+		{"mayorer", nil},
 	}
 
 	for _, tt := range tests {
@@ -1010,6 +1021,13 @@ func TestAgentBeadToAddress(t *testing.T) {
 			bead: &agentBead{
 				ID: "hq-dog-bravo",
 			},
+			want: "deacon/dogs/bravo",
+		},
+		{
+			name: "malformed hq-dog returns empty",
+			bead: &agentBead{
+				ID: "hq-dog",
+			},
 			want: "",
 		},
 		{
@@ -1306,6 +1324,11 @@ func TestValidateAgentWorkspaceDog(t *testing.T) {
 	}{
 		{"dog exists", "deacon/dogs/fido", true},
 		{"dog not exists", "deacon/dogs/ghost", false},
+		{"dog pool is not mailbox", "deacon/dogs", false},
+		{"empty dog name", "deacon/dogs/", false},
+		{"nested dog path", "deacon/dogs/fido/extra", false},
+		{"dot dog name", "deacon/dogs/.", false},
+		{"dotdot dog name", "deacon/dogs/..", false},
 		{"not a dog path", "deacon/cats/fido", false},
 	}
 
@@ -1358,6 +1381,21 @@ func TestAddressToAgentBeadID(t *testing.T) {
 			expected: "hq-deacon",
 		},
 		{
+			name:     "deacon without slash",
+			address:  "deacon",
+			expected: "hq-deacon",
+		},
+		{
+			name:     "dog",
+			address:  "deacon/dogs/alpha",
+			expected: "hq-dog-alpha",
+		},
+		{
+			name:     "hyphenated dog",
+			address:  "deacon/dogs/my-dog",
+			expected: "hq-dog-my-dog",
+		},
+		{
 			name:     "witness",
 			address:  "gastown/witness",
 			expected: "gt-witness",
@@ -1395,6 +1433,41 @@ func TestAddressToAgentBeadID(t *testing.T) {
 		{
 			name:     "rig with empty target",
 			address:  "gastown/",
+			expected: "",
+		},
+		{
+			name:     "dog pool is not agent bead",
+			address:  "deacon/dogs",
+			expected: "",
+		},
+		{
+			name:     "empty dog name is not agent bead",
+			address:  "deacon/dogs/",
+			expected: "",
+		},
+		{
+			name:     "nested dog path is not agent bead",
+			address:  "deacon/dogs/alpha/extra",
+			expected: "",
+		},
+		{
+			name:     "unknown deacon subpath is not deacon",
+			address:  "deacon/foo",
+			expected: "",
+		},
+		{
+			name:     "deacon prefix is not deacon",
+			address:  "deaconer",
+			expected: "",
+		},
+		{
+			name:     "unknown mayor subpath is not mayor",
+			address:  "mayor/foo",
+			expected: "",
+		},
+		{
+			name:     "mayor prefix is not mayor",
+			address:  "mayorer",
 			expected: "",
 		},
 	}
@@ -1802,6 +1875,45 @@ func TestNotifyRecipient_CanonicalAliasQueuesAllHeadlessCandidates(t *testing.T)
 		if nudges[0].ThreadID != msg.ThreadID {
 			t.Fatalf("Drain(%s)[0].ThreadID = %q, want %q", sessionID, nudges[0].ThreadID, msg.ThreadID)
 		}
+	}
+}
+
+func TestNotifyRecipient_DogQueuesDogSessionNotDeacon(t *testing.T) {
+	townRoot := t.TempDir()
+	r := &Router{
+		workDir:  t.TempDir(),
+		townRoot: townRoot,
+		tmux:     tmux.NewTmuxWithSocket("gt-test-missing-socket"),
+	}
+
+	msg := &Message{
+		From:     "mayor/",
+		To:       "deacon/dogs/fido",
+		Subject:  "dog delivery",
+		ThreadID: "thread-dog-delivery",
+	}
+
+	if err := r.notifyRecipient(msg); err != nil {
+		t.Fatalf("notifyRecipient returned error: %v", err)
+	}
+
+	dogNudges, err := nudge.Drain(townRoot, "hq-dog-fido")
+	if err != nil {
+		t.Fatalf("Drain(hq-dog-fido): %v", err)
+	}
+	if len(dogNudges) != 1 {
+		t.Fatalf("Drain(hq-dog-fido) returned %d nudges, want 1", len(dogNudges))
+	}
+	if dogNudges[0].ThreadID != msg.ThreadID {
+		t.Fatalf("dog nudge ThreadID = %q, want %q", dogNudges[0].ThreadID, msg.ThreadID)
+	}
+
+	deaconNudges, err := nudge.Drain(townRoot, "hq-deacon")
+	if err != nil {
+		t.Fatalf("Drain(hq-deacon): %v", err)
+	}
+	if len(deaconNudges) != 0 {
+		t.Fatalf("Drain(hq-deacon) returned %d nudges, want 0", len(deaconNudges))
 	}
 }
 
