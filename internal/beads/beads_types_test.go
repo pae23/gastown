@@ -459,6 +459,36 @@ func TestEnsureCustomTypesConfigYAML(t *testing.T) {
 	}
 }
 
+func TestEnsureCustomTypesConfigYAMLIgnoresDBCache(t *testing.T) {
+	ResetEnsuredDirs()
+
+	beadsDir := filepath.Join(t.TempDir(), ".beads")
+	if err := os.MkdirAll(beadsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ensuredMu.Lock()
+	ensuredDirs[beadsDir] = true
+	ensuredMu.Unlock()
+	t.Cleanup(ResetEnsuredDirs)
+
+	if err := EnsureCustomTypesConfigYAML(beadsDir); err != nil {
+		t.Fatalf("EnsureCustomTypesConfigYAML: %v", err)
+	}
+
+	config := string(mustReadFile(t, filepath.Join(beadsDir, "config.yaml")))
+	for _, want := range []string{
+		"types.custom: " + strings.Join(constants.BeadsCustomTypesList(), ","),
+		"types.infra: " + strings.Join(constants.BeadsInfraTypesList(), ","),
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("config.yaml missing %q in:\n%s", want, config)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(beadsDir, typesSentinel)); !os.IsNotExist(err) {
+		t.Fatalf("YAML-only type config must not write DB-verified sentinel, stat err: %v", err)
+	}
+}
+
 func TestEnsureCustomTypes_VerifyPersistence(t *testing.T) {
 	t.Run("sentinel not written when db verify fails", func(t *testing.T) {
 		if runtime.GOOS == "windows" {

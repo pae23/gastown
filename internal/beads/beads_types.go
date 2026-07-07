@@ -220,12 +220,6 @@ func EnsureCustomTypesConfigYAML(beadsDir string) error {
 	customTypes := strings.Join(constants.BeadsCustomTypesList(), ",")
 	infraTypes := strings.Join(constants.BeadsInfraTypesList(), ",")
 
-	ensuredMu.Lock()
-	defer ensuredMu.Unlock()
-
-	if ensuredDirs[beadsDir] {
-		return nil
-	}
 	if err := EnsureConfigYAMLValue(beadsDir, "types.custom", customTypes); err != nil {
 		return err
 	}
