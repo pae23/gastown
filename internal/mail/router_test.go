@@ -1878,6 +1878,45 @@ func TestNotifyRecipient_CanonicalAliasQueuesAllHeadlessCandidates(t *testing.T)
 	}
 }
 
+func TestNotifyRecipient_DogQueuesDogSessionNotDeacon(t *testing.T) {
+	townRoot := t.TempDir()
+	r := &Router{
+		workDir:  t.TempDir(),
+		townRoot: townRoot,
+		tmux:     tmux.NewTmuxWithSocket("gt-test-missing-socket"),
+	}
+
+	msg := &Message{
+		From:     "mayor/",
+		To:       "deacon/dogs/fido",
+		Subject:  "dog delivery",
+		ThreadID: "thread-dog-delivery",
+	}
+
+	if err := r.notifyRecipient(msg); err != nil {
+		t.Fatalf("notifyRecipient returned error: %v", err)
+	}
+
+	dogNudges, err := nudge.Drain(townRoot, "hq-dog-fido")
+	if err != nil {
+		t.Fatalf("Drain(hq-dog-fido): %v", err)
+	}
+	if len(dogNudges) != 1 {
+		t.Fatalf("Drain(hq-dog-fido) returned %d nudges, want 1", len(dogNudges))
+	}
+	if dogNudges[0].ThreadID != msg.ThreadID {
+		t.Fatalf("dog nudge ThreadID = %q, want %q", dogNudges[0].ThreadID, msg.ThreadID)
+	}
+
+	deaconNudges, err := nudge.Drain(townRoot, "hq-deacon")
+	if err != nil {
+		t.Fatalf("Drain(hq-deacon): %v", err)
+	}
+	if len(deaconNudges) != 0 {
+		t.Fatalf("Drain(hq-deacon) returned %d nudges, want 0", len(deaconNudges))
+	}
+}
+
 func TestNotifyRecipient_BusyAgentEscalationUsesUrgentQueuedNudge(t *testing.T) {
 	socket := requireNotifyTestSocket(t)
 	sessionName := "gt-crew-busy-escalation"

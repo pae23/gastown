@@ -520,6 +520,32 @@ func runNudge(cmd *cobra.Command, args []string) (retErr error) {
 		_ = events.LogFeed(events.TypeNudge, sender, events.NudgePayload("", constants.RoleDeacon, message))
 		return nil
 	}
+	if dogName, ok := mail.DogAddressName(target); ok {
+		sessionName := session.DogSessionName(dogName)
+		if nudgeModeFlag != NudgeModeImmediate && !hasACPSessionByName(townRoot, sessionName) {
+			exists, err := t.HasSession(sessionName)
+			if err != nil {
+				return fmt.Errorf("checking dog session: %w", err)
+			}
+			if !exists {
+				return fmt.Errorf("session %q not found (cannot queue nudge for nonexistent session)", sessionName)
+			}
+		}
+
+		if err := deliverNudge(t, sessionName, message, sender); err != nil {
+			return fmt.Errorf("nudging dog: %w", err)
+		}
+
+		fmt.Printf("%s Nudged %s (%s)\n", style.Bold.Render("✓"), target, nudgeModeFlag)
+		if townRoot, err := workspace.FindFromCwd(); err == nil && townRoot != "" {
+			_ = LogNudge(townRoot, target, message)
+		}
+		_ = events.LogFeed(events.TypeNudge, sender, events.NudgePayload("", target, message))
+		return nil
+	}
+	if strings.HasPrefix(target, constants.RoleMayor+"/") || strings.HasPrefix(target, constants.RoleDeacon+"/") {
+		return fmt.Errorf("invalid town target %q", target)
+	}
 
 	// Check if target is rig/polecat format or raw session name
 	if strings.Contains(target, "/") {
