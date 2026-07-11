@@ -656,6 +656,29 @@ func refreshPIDStateFromLiveInfo(townRoot string, config *Config, pid int) (bool
 	return changed, nil
 }
 
+// cleanLegacyDataDirArtifacts removes stale log/pid artifacts that older
+// gt/bd versions wrote at the top level of the data directory. The live files
+// live under <town>/daemon/ (config.LogFile, config.PidFile); leftover copies
+// in the data dir point outage investigations at months-old data and hide the
+// real crash trace (hq-oxyjcj: the 2026-07-10 outage RCA stalled on an
+// April-dated .dolt-data/dolt.log mistaken for the server log).
+// Only touches known filenames at the data-dir top level — never anything
+// inside a database's .dolt/ directory.
+func cleanLegacyDataDirArtifacts(config *Config) {
+	for _, name := range []string{"dolt.log", "dolt-server.log", "dolt.pid", "dolt-server.port"} {
+		legacy := filepath.Join(config.DataDir, name)
+		if legacy == config.LogFile || legacy == config.PidFile {
+			continue
+		}
+		if _, err := os.Stat(legacy); err != nil {
+			continue
+		}
+		if err := os.Remove(legacy); err == nil {
+			fmt.Fprintf(os.Stderr, "Removed legacy artifact %s (live server log: %s)\n", legacy, config.LogFile)
+		}
+	}
+}
+
 // countDoltDatabases counts the number of Dolt database directories in dataDir.
 // Each subdirectory containing a .dolt directory is considered a database.
 // Returns at least 1 so the caller never divides by zero.
@@ -1814,6 +1837,8 @@ func Start(townRoot string) error {
 	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
 		return fmt.Errorf("creating data directory: %w", err)
 	}
+
+	cleanLegacyDataDirArtifacts(config)
 
 	// Quarantine corrupted/phantom database dirs before server launch.
 	// WARNING: DO NOT remove, delete, or modify files inside Dolt's .dolt/

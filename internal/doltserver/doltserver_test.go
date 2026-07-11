@@ -5099,3 +5099,62 @@ func TestHealthMetrics_CommitFreshnessFields(t *testing.T) {
 		t.Errorf("LastCommitAge = %v, want >= 0", metrics.LastCommitAge)
 	}
 }
+
+func TestCleanLegacyDataDirArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	config := &Config{
+		DataDir: dir,
+		LogFile: filepath.Join(dir, "daemon", "dolt.log"),
+		PidFile: filepath.Join(dir, "daemon", "dolt.pid"),
+	}
+
+	legacy := []string{"dolt.log", "dolt-server.log", "dolt.pid", "dolt-server.port"}
+	for _, name := range legacy {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("stale"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Database contents must never be touched.
+	dbFile := filepath.Join(dir, "hq", ".dolt", "manifest")
+	if err := os.MkdirAll(filepath.Dir(dbFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dbFile, []byte("db"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanLegacyDataDirArtifacts(config)
+
+	for _, name := range legacy {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("legacy artifact %s was not removed", name)
+		}
+	}
+	if _, err := os.Stat(dbFile); err != nil {
+		t.Errorf("database file was touched: %v", err)
+	}
+}
+
+func TestCleanLegacyDataDirArtifacts_SkipsLiveFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Pathological config colocating live files with the data dir: the live
+	// log and pid files must survive cleanup.
+	config := &Config{
+		DataDir: dir,
+		LogFile: filepath.Join(dir, "dolt.log"),
+		PidFile: filepath.Join(dir, "dolt.pid"),
+	}
+	for _, name := range []string{"dolt.log", "dolt.pid"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("live"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cleanLegacyDataDirArtifacts(config)
+
+	for _, name := range []string{"dolt.log", "dolt.pid"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("live file %s was removed", name)
+		}
+	}
+}

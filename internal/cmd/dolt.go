@@ -611,6 +611,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 			style.Bold.Render("●"),
 			style.Bold.Render("running"),
 			pid)
+		fmt.Printf("  Log file: %s (view: gt dolt logs)\n", config.LogFile)
 
 		// Load state for more details
 		state, err := doltserver.LoadState(townRoot)
@@ -680,6 +681,7 @@ func runDoltStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("%s Dolt server is %s\n",
 			style.Dim.Render("○"),
 			"not running")
+		fmt.Printf("  Log file: %s (crash traces: gt dolt logs)\n", config.LogFile)
 
 		// List available databases
 		databases, _ := doltserver.ListDatabases(townRoot)

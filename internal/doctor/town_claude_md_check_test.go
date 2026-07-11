@@ -317,3 +317,138 @@ This is a regular project CLAUDE.md, not Gas Town.
 		t.Error("non-Gas Town file should not be recognized as identity anchor")
 	}
 }
+
+func TestTownCLAUDEmdCheck_StaleContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := &CheckContext{TownRoot: tmpDir}
+
+	// A file with all required sections present but containing the old,
+	// dangerous kill -QUIT diagnostics guidance (the pre-2026-07 template).
+	content := `# Gas Town
+
+This is a Gas Town workspace.
+
+## Dolt Server — Operational Awareness (All Agents)
+
+Dolt is the data plane for beads.
+
+` + "```bash" + `
+kill -QUIT $(cat ~/gt/.dolt-data/dolt.pid)  # Dumps stacks to Dolt's stderr log
+` + "```" + `
+
+### Communication hygiene
+
+Default to nudge.
+`
+	claudePath := filepath.Join(tmpDir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	check := NewTownCLAUDEmdCheck()
+	result := check.Run(ctx)
+
+	if result.Status != StatusWarning {
+		t.Fatalf("expected StatusWarning for stale content, got %v: %s", result.Status, result.Message)
+	}
+	if len(check.staleMarkers) == 0 {
+		t.Fatal("expected stale markers to be detected")
+	}
+	if len(check.missingSections) != 0 {
+		t.Errorf("both required headings are present; expected 0 missing sections, got %d", len(check.missingSections))
+	}
+}
+
+func TestTownCLAUDEmdCheck_Fix_ReplacesStaleSection(t *testing.T) {
+	tmpDir := t.TempDir()
+	ctx := &CheckContext{TownRoot: tmpDir}
+
+	// Mirror the real-world shape from hq-oxyjcj: the stale Dolt section
+	// duplicated twice (append-only fixes), plus user content around it.
+	staleDolt := `## Dolt Server — Operational Awareness (All Agents)
+
+Old guidance.
+
+` + "```bash" + `
+kill -QUIT $(cat ~/gt/.dolt-data/dolt.pid)  # Dumps stacks to Dolt's stderr log
+` + "```" + `
+
+### Communication hygiene
+
+Old hygiene text.
+`
+	original := `# Gas Town
+
+This is a Gas Town workspace.
+
+` + staleDolt + `
+
+` + staleDolt + `
+
+## My Custom Section
+
+User content to preserve.
+`
+	claudePath := filepath.Join(tmpDir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	check := NewTownCLAUDEmdCheck()
+	result := check.Run(ctx)
+	if result.Status != StatusWarning {
+		t.Fatalf("expected StatusWarning, got %v", result.Status)
+	}
+	if len(check.staleMarkers) == 0 {
+		t.Fatal("expected stale markers to be detected")
+	}
+
+	if err := check.Fix(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+
+	// Stale guidance must be gone
+	if strings.Contains(content, "kill -QUIT $(cat") {
+		t.Error("stale kill -QUIT guidance survived the fix")
+	}
+	if strings.Contains(content, ".dolt-data/dolt.pid") {
+		t.Error("stale .dolt-data/dolt.pid path survived the fix")
+	}
+
+	// Canonical replacement must be present, exactly once
+	if got := strings.Count(content, "## Dolt Server — Operational Awareness"); got != 1 {
+		t.Errorf("expected exactly 1 Dolt Server section after fix, got %d", got)
+	}
+	if !strings.Contains(content, "dolt dump") {
+		t.Error("canonical non-fatal diagnostics guidance missing after fix")
+	}
+
+	// Preamble and user content preserved
+	if !strings.Contains(content, "This is a Gas Town workspace.") {
+		t.Error("preamble was not preserved")
+	}
+	if !strings.Contains(content, "## My Custom Section") || !strings.Contains(content, "User content to preserve.") {
+		t.Error("user custom section was not preserved")
+	}
+
+	// Fix must converge: re-running the check should now pass
+	recheck := NewTownCLAUDEmdCheck()
+	if r := recheck.Run(ctx); r.Status != StatusOK {
+		t.Errorf("expected StatusOK after fix, got %v: %s (%v)", r.Status, r.Message, r.Details)
+	}
+}
+
+func TestTownRootTemplate_NoStaleMarkers(t *testing.T) {
+	canonical := templates.TownRootCLAUDEmd()
+	for _, m := range templates.TownRootStaleMarkers() {
+		if strings.Contains(canonical, m.Marker) {
+			t.Errorf("canonical template contains its own stale marker %q (%s) — the fix would loop forever", m.Marker, m.Name)
+		}
+	}
+}
