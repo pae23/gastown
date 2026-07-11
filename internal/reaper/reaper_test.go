@@ -78,102 +78,152 @@ func TestFormatJSON(t *testing.T) {
 }
 
 func TestParentExcludeJoin(t *testing.T) {
-	joinClause, whereCondition := parentExcludeJoin("testdb")
+	for _, tc := range []struct {
+		name        string
+		cols        depTargetCols
+		wantWisp    string
+		wantIssue   string
+		wantExtern  string
+		rejectExprs []string
+	}{
+		{
+			name:       "split",
+			cols:       depTargetCols{split: true},
+			wantWisp:   "pw.id = wd.depends_on_wisp_id",
+			wantIssue:  "pi.id = wd.depends_on_issue_id",
+			wantExtern: "wd.depends_on_external IS NOT NULL",
+			// "wd.depends_on_id" is a prefix of the typed columns, so reject the
+			// legacy expression only in its join positions.
+			rejectExprs: []string{"pw.id = wd.depends_on_id ", "COALESCE"},
+		},
+		{
+			name:        "legacy",
+			cols:        depTargetCols{legacy: true},
+			wantWisp:    "pw.id = wd.depends_on_id",
+			wantIssue:   "pi.id = wd.depends_on_id",
+			wantExtern:  "FALSE",
+			rejectExprs: []string{"depends_on_wisp_id", "depends_on_issue_id", "depends_on_external"},
+		},
+		{
+			name:       "mixed",
+			cols:       depTargetCols{split: true, legacy: true},
+			wantWisp:   "pw.id = COALESCE(wd.depends_on_wisp_id, wd.depends_on_id)",
+			wantIssue:  "pi.id = COALESCE(wd.depends_on_issue_id, wd.depends_on_id)",
+			wantExtern: "wd.depends_on_external IS NOT NULL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			joinClause, whereCondition := parentExcludeJoin(tc.cols)
 
-	// JOIN clause should reference the correct database.
-	if joinClause == "" {
-		t.Error("parentExcludeJoin joinClause should not be empty")
-	}
-	// parentExcludeJoin no longer qualifies table names with the database — the
-	// reaper connects to a specific database via the DSN, so unqualified names
-	// are correct. The dbName parameter is retained for API compatibility.
-
-	// JOIN should select wisps with open parents from wisp_dependencies.
-	if !contains(joinClause, "wisp_dependencies") {
-		t.Error("parentExcludeJoin should query wisp_dependencies")
-	}
-	if !contains(joinClause, "wd.depends_on_wisp_id") {
-		t.Error("parentExcludeJoin should join wisp parents through depends_on_wisp_id")
-	}
-	if !contains(joinClause, "wd.depends_on_issue_id") {
-		t.Error("parentExcludeJoin should join issue parents through depends_on_issue_id")
-	}
-	if contains(joinClause, "wd.depends_on_id") {
-		t.Error("parentExcludeJoin should not use legacy depends_on_id")
-	}
-	if !contains(joinClause, "parent-child") {
-		t.Error("parentExcludeJoin should filter on parent-child type")
-	}
-	if !contains(joinClause, "'open', 'hooked', 'in_progress'") {
-		t.Error("parentExcludeJoin should check for open parent statuses")
-	}
-
-	// WHERE condition should be an IS NULL anti-join filter.
-	if whereCondition == "" {
-		t.Error("parentExcludeJoin whereCondition should not be empty")
-	}
-	if !contains(whereCondition, "IS NULL") {
-		t.Error("parentExcludeJoin whereCondition should use IS NULL for anti-join")
+			if !contains(joinClause, "wisp_dependencies") {
+				t.Error("parentExcludeJoin should query wisp_dependencies")
+			}
+			for _, want := range []string{tc.wantWisp, tc.wantIssue, tc.wantExtern} {
+				if !contains(joinClause, want) {
+					t.Errorf("parentExcludeJoin joinClause missing %q:\n%s", want, joinClause)
+				}
+			}
+			for _, reject := range tc.rejectExprs {
+				if contains(joinClause, reject) {
+					t.Errorf("parentExcludeJoin joinClause should not contain %q:\n%s", reject, joinClause)
+				}
+			}
+			if !contains(joinClause, "parent-child") {
+				t.Error("parentExcludeJoin should filter on parent-child type")
+			}
+			if !contains(joinClause, "'open', 'hooked', 'in_progress'") {
+				t.Error("parentExcludeJoin should check for open parent statuses")
+			}
+			if !contains(whereCondition, "IS NULL") {
+				t.Error("parentExcludeJoin whereCondition should use IS NULL for anti-join")
+			}
+		})
 	}
 }
 
-func TestReaperQueriesUseTypedDependencyColumns(t *testing.T) {
-	sourcePath := "reaper.go"
-	data, err := os.ReadFile(sourcePath)
-	if err != nil {
-		t.Fatalf("read %s: %v", sourcePath, err)
-	}
-	source := string(data)
-	if strings.Contains(source, "depends_on_id") {
-		t.Fatalf("reaper queries should not use legacy depends_on_id")
-	}
+func TestDepTargetColsExpressions(t *testing.T) {
+	split := depTargetCols{split: true}
+	legacy := depTargetCols{legacy: true}
+	mixed := depTargetCols{split: true, legacy: true}
 
-	scanBody := sourceBetween(t, source, "func Scan(", "func Reap(")
-	autoCloseBody := sourceBetween(t, source, "func AutoClose(", "// batchDeleteRows")
-	batchDeleteBody := sourceBetween(t, source, "func batchDeleteRows(", "// ClosePluginReceiptResult")
-	schemaBody := sourceBetween(t, source, "func HasReaperSchema(", "func tableExists(")
-
-	for _, want := range []string{
-		`hasColumns(ctx, db, "wisp_dependencies", "depends_on_issue_id", "depends_on_wisp_id", "depends_on_external")`,
-		`hasColumns(ctx, db, "dependencies", "depends_on_issue_id", "depends_on_wisp_id", "depends_on_external")`,
-	} {
-		if !strings.Contains(schemaBody, want) {
-			t.Fatalf("HasReaperSchema missing typed schema gate %q", want)
-		}
-	}
-
-	for _, body := range []struct {
-		name string
-		text string
+	cases := []struct {
+		got, want string
 	}{
-		{name: "Scan", text: scanBody},
-		{name: "AutoClose", text: autoCloseBody},
-	} {
-		if !strings.Contains(body.text, "d.depends_on_issue_id = dep.id") {
-			t.Fatalf("%s should join dependency blockers through depends_on_issue_id", body.name)
-		}
-		if !strings.Contains(body.text, "SELECT DISTINCT d.depends_on_issue_id") {
-			t.Fatalf("%s should exclude blocked issues through depends_on_issue_id", body.name)
-		}
-		if !strings.Contains(body.text, "d.depends_on_issue_id IS NOT NULL") {
-			t.Fatalf("%s should guard nullable depends_on_issue_id in NOT IN subquery", body.name)
+		{split.wispRef("d"), "d.depends_on_wisp_id"},
+		{split.issueRef("d"), "d.depends_on_issue_id"},
+		{split.externalNotNull("d"), "d.depends_on_external IS NOT NULL"},
+		{split.externalIsNull("d"), "d.depends_on_external IS NULL"},
+		{legacy.wispRef("d"), "d.depends_on_id"},
+		{legacy.issueRef("d"), "d.depends_on_id"},
+		{legacy.externalNotNull("d"), "FALSE"},
+		{legacy.externalIsNull("d"), "TRUE"},
+		{mixed.wispRef("d"), "COALESCE(d.depends_on_wisp_id, d.depends_on_id)"},
+		{mixed.issueRef("d"), "COALESCE(d.depends_on_issue_id, d.depends_on_id)"},
+		{mixed.externalNotNull("d"), "d.depends_on_external IS NOT NULL"},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("expression = %q, want %q", c.got, c.want)
 		}
 	}
 
-	if !strings.Contains(scanBody, "wd.depends_on_wisp_id IS NOT NULL OR wd.depends_on_issue_id IS NOT NULL") {
-		t.Fatal("Scan dangling-parent anomaly should ignore external-only dependency rows")
+	for _, c := range []struct {
+		cols depTargetCols
+		want bool
+	}{
+		{split, true}, {legacy, true}, {mixed, true}, {depTargetCols{}, false},
+	} {
+		if c.cols.valid() != c.want {
+			t.Errorf("valid(%+v) = %v, want %v", c.cols, c.cols.valid(), c.want)
+		}
 	}
-	if !strings.Contains(batchDeleteBody, "DELETE FROM wisp_dependencies WHERE depends_on_wisp_id IN %s") {
-		t.Fatal("batchDeleteRows should clean reverse wisp dependency references")
-	}
-	if !strings.Contains(batchDeleteBody, "DELETE FROM dependencies WHERE depends_on_wisp_id IN %s") {
-		t.Fatal("batchDeleteRows should clean reverse issue dependency references to wisps")
-	}
-	if !strings.Contains(batchDeleteBody, "DELETE FROM wisp_dependencies WHERE depends_on_issue_id IN %s") {
-		t.Fatal("batchDeleteRows should clean reverse wisp parent references to issues")
-	}
-	if !strings.Contains(batchDeleteBody, "DELETE FROM dependencies WHERE depends_on_issue_id IN %s") {
-		t.Fatal("batchDeleteRows should clean reverse issue dependency references")
+}
+
+func TestDetectDepSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		schema fakeSchema
+		want   DepSchema
+	}{
+		{
+			name:   "split",
+			schema: fakeSchema{wispDepCols: splitTargetCols, depCols: splitTargetCols, hasDepsTable: true},
+			want:   DepSchema{WispDeps: depTargetCols{split: true}, Deps: depTargetCols{split: true}, HasDeps: true},
+		},
+		{
+			name:   "legacy",
+			schema: fakeSchema{wispDepCols: legacyTargetCols, depCols: legacyTargetCols, hasDepsTable: true},
+			want:   DepSchema{WispDeps: depTargetCols{legacy: true}, Deps: depTargetCols{legacy: true}, HasDeps: true},
+		},
+		{
+			name:   "mixed",
+			schema: fakeSchema{wispDepCols: mixedTargetCols, depCols: mixedTargetCols, hasDepsTable: true},
+			want:   DepSchema{WispDeps: depTargetCols{split: true, legacy: true}, Deps: depTargetCols{split: true, legacy: true}, HasDeps: true},
+		},
+		{
+			name:   "no dependencies table",
+			schema: fakeSchema{wispDepCols: splitTargetCols},
+			want:   DepSchema{WispDeps: depTargetCols{split: true}},
+		},
+		{
+			// A partial typed set must not be trusted as split.
+			name:   "partial split",
+			schema: fakeSchema{wispDepCols: []string{"depends_on_issue_id", "depends_on_wisp_id"}},
+			want:   DepSchema{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := &fakeReaperState{schema: tc.schema, ops: map[int][]string{}}
+			db := openFakeReaperDB(t, state)
+			t.Cleanup(func() { _ = db.Close() })
+			got, err := DetectDepSchema(context.Background(), db)
+			if err != nil {
+				t.Fatalf("DetectDepSchema: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("DetectDepSchema = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -183,8 +233,7 @@ func TestReaperQueriesUseTypedDependencyColumns(t *testing.T) {
 // positional shift: "FROM wisps w gt WHERE..." instead of "FROM wisps w LEFT JOIN...".
 func TestReapQueryNoDatabaseNameInjection(t *testing.T) {
 	// Reproduce the exact Sprintf call from Reap() to verify no dbName injection.
-	dbName := "gt"
-	parentJoin, parentWhere := parentExcludeJoin(dbName)
+	parentJoin, parentWhere := parentExcludeJoin(depTargetCols{split: true})
 	whereClause := fmt.Sprintf(
 		"w.status IN ('open', 'hooked', 'in_progress') AND w.created_at < ? AND %s", parentWhere)
 
@@ -463,10 +512,76 @@ func TestClosedMoleculeStepReapBehavior(t *testing.T) {
 	}
 }
 
+// TestScanReapLegacyDependencySchema verifies that scan and reap work against a
+// database still on the legacy dependency schema (single depends_on_id column,
+// no typed target columns). Regression test for hq-2eu2wl: both schema
+// generations coexist on shared Dolt servers, and split-only SQL either errors
+// or forces the database to be skipped entirely.
+func TestScanReapLegacyDependencySchema(t *testing.T) {
+	now := time.Now().UTC()
+	state := &fakeReaperState{
+		schema: fakeSchema{wispDepCols: legacyTargetCols, depCols: legacyTargetCols, hasDepsTable: true},
+		wisps: map[string]*fakeWisp{
+			"mol-closed":           {id: "mol-closed", status: "closed", issueType: "molecule", createdAt: now},
+			"mol-open":             {id: "mol-open", status: "open", issueType: "molecule", createdAt: now},
+			"step-closed-mol-old":  {id: "step-closed-mol-old", status: "open", issueType: "task", createdAt: now.Add(-48 * time.Hour)},
+			"step-open-parent-old": {id: "step-open-parent-old", status: "open", issueType: "task", createdAt: now.Add(-48 * time.Hour)},
+			"agent-step":           {id: "agent-step", status: "open", issueType: "agent", createdAt: now.Add(-48 * time.Hour)},
+			"stale-orphan":         {id: "stale-orphan", status: "open", issueType: "task", createdAt: now.Add(-48 * time.Hour)},
+			"fresh-orphan":         {id: "fresh-orphan", status: "open", issueType: "task", createdAt: now.Add(-1 * time.Hour)},
+		},
+		deps: []fakeDep{
+			{issueID: "step-closed-mol-old", dependsOnID: "mol-closed", depType: "parent-child"},
+			{issueID: "step-open-parent-old", dependsOnID: "mol-open", depType: "parent-child"},
+			{issueID: "agent-step", dependsOnID: "mol-closed", depType: "parent-child"},
+		},
+		ops: map[int][]string{},
+	}
+	db := openFakeReaperDB(t, state)
+	t.Cleanup(func() { _ = db.Close() })
+
+	maxAge := 24 * time.Hour
+	scan, err := Scan(db, "legacydb", maxAge, 7*24*time.Hour, 7*24*time.Hour, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("Scan on legacy schema: %v", err)
+	}
+	if scan.MoleculeStepCandidates != 1 {
+		t.Fatalf("Scan MoleculeStepCandidates = %d, want 1", scan.MoleculeStepCandidates)
+	}
+	if scan.ReapCandidates != 1 {
+		t.Fatalf("Scan ReapCandidates = %d, want 1", scan.ReapCandidates)
+	}
+
+	realRun, err := Reap(db, "legacydb", maxAge, false)
+	if err != nil {
+		t.Fatalf("Reap on legacy schema: %v", err)
+	}
+	if realRun.MoleculeStepsClosed != 1 {
+		t.Fatalf("MoleculeStepsClosed = %d, want 1", realRun.MoleculeStepsClosed)
+	}
+	if realRun.Reaped != 1 {
+		t.Fatalf("Reaped = %d, want 1", realRun.Reaped)
+	}
+
+	for _, id := range []string{"step-closed-mol-old", "stale-orphan"} {
+		if got := state.status(id); got != "closed" {
+			t.Fatalf("%s status = %q, want closed", id, got)
+		}
+	}
+	for _, id := range []string{"step-open-parent-old", "agent-step", "fresh-orphan", "mol-open"} {
+		if got := state.status(id); got != "open" {
+			t.Fatalf("%s status = %q, want open", id, got)
+		}
+	}
+}
+
 var fakeReaperDriverID uint64
 
 func openFakeReaperDB(t *testing.T, state *fakeReaperState) *sql.DB {
 	t.Helper()
+	if state.schema.wispDepCols == nil {
+		state.schema.wispDepCols = splitTargetCols
+	}
 	driverName := fmt.Sprintf("fake_reaper_%d", atomic.AddUint64(&fakeReaperDriverID, 1))
 	sql.Register(driverName, &fakeReaperDriver{state: state})
 	db, err := sql.Open(driverName, "")
@@ -490,12 +605,51 @@ type fakeDep struct {
 	depType           string
 }
 
+// fakeSchema describes the dependency columns the fake database reports
+// through information_schema, so DetectDepSchema sees a chosen generation.
+type fakeSchema struct {
+	wispDepCols  []string
+	depCols      []string
+	hasDepsTable bool
+}
+
+var (
+	splitTargetCols  = []string{"depends_on_issue_id", "depends_on_wisp_id", "depends_on_external"}
+	legacyTargetCols = []string{"depends_on_id"}
+	mixedTargetCols  = append(append([]string{}, splitTargetCols...), legacyTargetCols...)
+)
+
+// legacyOnly reports whether wisp_dependencies carries only the legacy column,
+// which switches the SQL validators to expect legacy expressions.
+func (s fakeSchema) legacyOnly() bool {
+	for _, col := range s.wispDepCols {
+		if col == "depends_on_wisp_id" {
+			return false
+		}
+	}
+	return true
+}
+
 type fakeReaperState struct {
 	mu       sync.Mutex
 	wisps    map[string]*fakeWisp
 	deps     []fakeDep
+	schema   fakeSchema
 	nextConn int
 	ops      map[int][]string
+}
+
+func (s *fakeReaperState) schemaColumnRowsLocked() *fakeReaperRows {
+	var rows [][]driver.Value
+	for _, col := range s.schema.wispDepCols {
+		rows = append(rows, []driver.Value{"wisp_dependencies", col})
+	}
+	if s.schema.hasDepsTable {
+		for _, col := range s.schema.depCols {
+			rows = append(rows, []driver.Value{"dependencies", col})
+		}
+	}
+	return &fakeReaperRows{cols: []string{"table_name", "column_name"}, rows: rows}
 }
 
 func (s *fakeReaperState) status(id string) string {
@@ -653,14 +807,23 @@ func (c *fakeReaperConn) QueryContext(_ context.Context, query string, args []dr
 	defer c.state.mu.Unlock()
 	c.state.record(c.id, "QUERY "+normalized)
 
+	legacySchema := c.state.schema.legacyOnly()
 	switch {
+	case strings.Contains(normalized, "information_schema.columns"):
+		return c.state.schemaColumnRowsLocked(), nil
+	case strings.Contains(normalized, "information_schema.tables") && strings.Contains(normalized, "table_name = 'dependencies'"):
+		count := 0
+		if c.state.schema.hasDepsTable {
+			count = 1
+		}
+		return fakeCountRows(count), nil
 	case strings.Contains(normalized, "SELECT COUNT(*) FROM wisps w") && strings.Contains(normalized, "created_at <"):
-		if err := validateStaleWispQuery(normalized); err != nil {
+		if err := validateStaleWispQuery(normalized, legacySchema); err != nil {
 			return nil, err
 		}
 		return fakeCountRows(len(c.state.staleCandidatesLocked(namedTime(args), strings.Contains(normalized, "closed_molecule_step.issue_id IS NULL")))), nil
 	case strings.Contains(normalized, "SELECT COUNT(*) FROM wisps w") && strings.Contains(normalized, "pm.issue_type = 'molecule'"):
-		if err := validateMoleculeStepQuery(normalized); err != nil {
+		if err := validateMoleculeStepQuery(normalized, legacySchema); err != nil {
 			return nil, err
 		}
 		return fakeCountRows(len(c.state.moleculeStepCandidatesLocked())), nil
@@ -673,12 +836,12 @@ func (c *fakeReaperConn) QueryContext(_ context.Context, query string, args []dr
 	case strings.Contains(normalized, "SELECT COUNT(*) FROM wisp_dependencies wd"):
 		return fakeCountRows(0), nil
 	case strings.Contains(normalized, "SELECT w.id FROM wisps w") && strings.Contains(normalized, "created_at <"):
-		if err := validateStaleWispQuery(normalized); err != nil {
+		if err := validateStaleWispQuery(normalized, legacySchema); err != nil {
 			return nil, err
 		}
 		return fakeIDRows(c.state.staleCandidatesLocked(namedTime(args), strings.Contains(normalized, "closed_molecule_step.issue_id IS NULL"))), nil
 	case strings.Contains(normalized, "SELECT w.id FROM wisps w") && strings.Contains(normalized, "pm.issue_type = 'molecule'"):
-		if err := validateMoleculeStepQuery(normalized); err != nil {
+		if err := validateMoleculeStepQuery(normalized, legacySchema); err != nil {
 			return nil, err
 		}
 		return fakeIDRows(c.state.moleculeStepCandidatesLocked()), nil
@@ -769,7 +932,19 @@ func normalizeSQL(query string) string {
 	return strings.Join(strings.Fields(query), " ")
 }
 
-func validateMoleculeStepQuery(query string) error {
+func validateMoleculeStepQuery(query string, legacySchema bool) error {
+	if legacySchema {
+		return requireLegacySQL(query,
+			"wd.issue_id",
+			"pm.id = wd.depends_on_id",
+			"wd.type = 'parent-child'",
+			"pm.issue_type = 'molecule'",
+			"pm.status = 'closed'",
+			"NOT EXISTS",
+			"w.issue_type != 'agent'",
+			"w.status IN ('open', 'hooked', 'in_progress')",
+		)
+	}
 	return requireSQL(query,
 		"wd.issue_id",
 		"pm.id = wd.depends_on_wisp_id",
@@ -783,7 +958,20 @@ func validateMoleculeStepQuery(query string) error {
 	)
 }
 
-func validateStaleWispQuery(query string) error {
+func validateStaleWispQuery(query string, legacySchema bool) error {
+	if legacySchema {
+		return requireLegacySQL(query,
+			"wd.issue_id",
+			"pw.id = wd.depends_on_id",
+			"pi.id = wd.depends_on_id",
+			"pi.status IN ('open', 'hooked', 'in_progress')",
+			"wd.type = 'parent-child'",
+			"w.issue_type != 'agent'",
+			"w.created_at < ?",
+			"open_parent.issue_id IS NULL",
+			"closed_molecule_step.issue_id IS NULL",
+		)
+	}
 	return requireSQL(query,
 		"wd.issue_id",
 		"pw.id = wd.depends_on_wisp_id",
@@ -801,6 +989,22 @@ func validateStaleWispQuery(query string) error {
 func requireSQL(query string, required ...string) error {
 	if strings.Contains(query, "depends_on_id") {
 		return fmt.Errorf("query uses legacy depends_on_id column: %s", query)
+	}
+	for _, want := range required {
+		if !strings.Contains(query, want) {
+			return fmt.Errorf("query missing %q: %s", want, query)
+		}
+	}
+	return nil
+}
+
+// requireLegacySQL asserts a query generated for a legacy-schema database:
+// it must reference only depends_on_id, never the split typed columns.
+func requireLegacySQL(query string, required ...string) error {
+	for _, forbidden := range []string{"depends_on_wisp_id", "depends_on_issue_id", "depends_on_external"} {
+		if strings.Contains(query, forbidden) {
+			return fmt.Errorf("legacy-schema query uses typed column %s: %s", forbidden, query)
+		}
 	}
 	for _, want := range required {
 		if !strings.Contains(query, want) {
