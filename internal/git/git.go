@@ -2916,6 +2916,42 @@ func (g *Git) PushRemoteRefTargetStatus(remote string, ref RemoteRef, target str
 	return g.preservationOfRefAgainstRef("FETCH_HEAD", target)
 }
 
+// PushRemoteTargetStatus reports whether HEAD is already preserved on target as
+// target exists on remote's PUSH url.
+//
+// Remote-tracking refs (origin/main) follow the FETCH url. On a triangular
+// remote — fetch upstream, push to a fork — merged work lands on the fork, so
+// origin/main never contains it and the branch looks unmerged forever. Fetching
+// target from the push url is the only way to see those patches. Comparison runs
+// through the usual ancestor / merge-tree / patch-id chain, so it holds even
+// though the refinery rebases (merged_sha != original_sha).
+//
+// When fetch and push urls are the same this degrades to fetching target from
+// the single remote, which is still fresher than the tracking ref.
+func (g *Git) PushRemoteTargetStatus(remote, target string) (BranchPreservationStatus, error) {
+	var status BranchPreservationStatus
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return status, fmt.Errorf("target branch is required")
+	}
+	if remote == "" {
+		remote = "origin"
+	}
+	// Fetch into a dedicated ref rather than relying on FETCH_HEAD: polecat
+	// worktrees share one .git, so concurrent recovery checks would race on it.
+	localRef := "refs/gt/push-target/" + remote + "/" + target
+	refspec := "+refs/heads/" + target + ":" + localRef
+	if _, err := g.run("fetch", "--no-tags", "--force", g.pushTarget(remote), refspec); err != nil {
+		return status, fmt.Errorf("fetching target %s from push remote: %w", target, err)
+	}
+	status, err := g.preservationOfRefAgainstRef("HEAD", localRef)
+	if err != nil {
+		return status, err
+	}
+	status.ComparisonBase = localRef
+	return status, nil
+}
+
 // CountCherryUnmergedCommits counts `git cherry` lines whose patches are not
 // present on the comparison base.
 func CountCherryUnmergedCommits(out string) int {

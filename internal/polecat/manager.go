@@ -2383,14 +2383,7 @@ func (m *Manager) workstateInputForPolecat(name string, state State, issue strin
 		input.IgnoreCleanupStatus = true
 	}
 	input.MQNotRequired = m.mqNotRequiredSource(workIssue)
-	if input.MQCheckRequired && input.HasSubmittableWork && !input.AssignedBeadTerminal && !input.MQNotRequired {
-		mr, err := m.beads.FindMRForBranchAny(input.Branch)
-		if err != nil {
-			input.MQLookupFailed = true
-		} else {
-			input.MRSubmitted = mr != nil
-		}
-	}
+	ApplyMQEvidence(&input, m.beads, clonePath, targetRefs)
 	return input
 }
 

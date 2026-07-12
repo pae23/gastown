@@ -44,6 +44,36 @@ func TestDecideWorkstateCanonicalFields(t *testing.T) {
 			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "git-unpushed", NeedsRecovery: true, CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed", Blockers: []string{"git_state=has_unpushed unpushed_commits=1"}},
 		},
 		{
+			// gt-91ju: MR beads are wisps the reaper collects once work merges, so a
+			// merged polecat has no MR bead to find. Merged work is proof of
+			// submission and must outrank the missing wisp, or every polecat that
+			// merges successfully is flagged NEEDS_MQ_SUBMIT forever.
+			name: "merged work is safe to nuke without an mr bead",
+			in:   WorkstateInput{State: StateIdle, CleanupStatus: CleanupClean, Branch: "polecat/test", MQCheckRequired: true, HasSubmittableWork: true, WorkMerged: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictSafeToNuke, Reason: "reusable", Reusable: true, SafeToNuke: true, MQStatus: "merged", ReuseStatus: "idle-preserved"},
+		},
+		{
+			// The MR wisp is gone *because* the work landed, so a lookup failure must
+			// not re-block a polecat whose patches are demonstrably on the target.
+			name: "merged work outranks a failed mq lookup",
+			in:   WorkstateInput{State: StateIdle, CleanupStatus: CleanupClean, Branch: "polecat/test", MQCheckRequired: true, HasSubmittableWork: true, WorkMerged: true, MQLookupFailed: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictSafeToNuke, Reason: "reusable", Reusable: true, SafeToNuke: true, MQStatus: "merged", ReuseStatus: "idle-preserved"},
+		},
+		{
+			// The other half of the acceptance pair: work that was pushed but never
+			// enqueued is NOT merged, so it must still be caught (issue #1035).
+			name: "pushed but unmerged and unsubmitted still needs mq submit",
+			in:   WorkstateInput{State: StateIdle, CleanupStatus: CleanupClean, Branch: "polecat/test", MQCheckRequired: true, HasSubmittableWork: true, WorkMerged: false},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsMQSubmit, Reason: "mq-not-submitted", NeedsRecovery: true, NeedsMQSubmit: true, MQStatus: "not_submitted", CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed"},
+		},
+		{
+			// Merged proves submission, not cleanliness: uncommitted work in the
+			// worktree still blocks, because nuking it would destroy that work.
+			name: "merged work does not excuse a dirty worktree",
+			in:   WorkstateInput{State: StateIdle, CleanupStatus: CleanupClean, Branch: "polecat/test", GitDirty: true, GitDirtyReason: "git_state=has_uncommitted uncommitted_files=1", MQCheckRequired: true, HasSubmittableWork: true, WorkMerged: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "git-dirty", NeedsRecovery: true, CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed", Blockers: []string{"git_state=has_uncommitted uncommitted_files=1"}},
+		},
+		{
 			name: "mr submission makes mq submitted",
 			in:   WorkstateInput{State: StateIdle, CleanupStatus: CleanupClean, Branch: "polecat/test", MQCheckRequired: true, HasSubmittableWork: true, MRSubmitted: true},
 			want: WorkstateDisposition{Verdict: WorkstateVerdictSafeToNuke, Reason: "reusable", Reusable: true, SafeToNuke: true, MQStatus: "submitted", ReuseStatus: "idle-preserved"},

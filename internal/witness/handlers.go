@@ -1078,14 +1078,7 @@ func slotOpenDecision(workDir, townRoot, rigName, polecatName, exitType string) 
 		input.IgnoreCleanupStatus = true
 	}
 	input.MQNotRequired = witnessMQNotRequiredSource(rigBeads, issueID)
-	if input.MQCheckRequired && input.HasSubmittableWork && !input.AssignedBeadTerminal && !input.MQNotRequired {
-		mr, err := rigBeads.FindMRForBranchAny(input.Branch)
-		if err != nil {
-			input.MQLookupFailed = true
-		} else {
-			input.MRSubmitted = mr != nil
-		}
-	}
+	polecat.ApplyMQEvidenceToSlotReuse(&input, rigBeads, clonePath, targetRefs)
 	return polecat.DecideSlotReuse(input)
 }
 
