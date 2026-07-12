@@ -34,6 +34,41 @@ func town(t *testing.T, db string, liveChunkSize int) string {
 	return root
 }
 
+// journalTown builds a town root whose live database holds journalSize bytes of
+// uncompressed chunk journal and collectedSize bytes of collected chunks in
+// oldgen (0 for a store that has never been collected). This is what a freshly
+// created or write-heavy database looks like on disk.
+func journalTown(t *testing.T, db string, journalSize, collectedSize int) string {
+	t.Helper()
+	root := t.TempDir()
+	noms := filepath.Join(root, ".dolt-data", db, ".dolt", "noms")
+	if err := os.MkdirAll(filepath.Join(noms, "oldgen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noms, "manifest"), []byte("4:1:manifest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noms, doltJournalFile), make([]byte, journalSize), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noms, journalIndexFile), make([]byte, 32*1024), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if collectedSize > 0 {
+		writeStore(t, filepath.Join(noms, "oldgen"), 1, collectedSize)
+	}
+	return root
+}
+
+func hasDiagnostic(st BackupStatus, substr string) bool {
+	for _, d := range st.Diagnostics {
+		if strings.Contains(d, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 func backupPath(root, db string) string {
 	return filepath.Join(root, ".dolt-backup", db)
 }
@@ -184,6 +219,64 @@ func TestInspectBackups_TruncatedBackupFailsSizeFloor(t *testing.T) {
 	st := statusFor(t, root, "beads")
 	if !hasProblem(st, "truncated") {
 		t.Errorf("expected size-floor problem, got %v", st.Problems)
+	}
+}
+
+// The live chunk journal is uncompressed and a backup holds only compressed
+// chunks, so a journal-dominated database dwarfs its own complete backup. The
+// size floor must not read that as truncation (gt-l8tz: the `gt` database's
+// 53KB archive against a 922KB journal reported RED at 6%).
+func TestInspectBackups_JournalDominatedLiveStoreSkipsSizeFloor(t *testing.T) {
+	root := journalTown(t, "gt", 922_482, 0)
+	writeStore(t, filepath.Join(backupPath(root, "gt"), "gt-backup"), 1, 53_195)
+
+	st := statusFor(t, root, "gt")
+	if !st.Healthy() {
+		t.Fatalf("expected healthy, got %v", st.Problems)
+	}
+	if st.LiveCollectedBytes != 0 {
+		t.Errorf("LiveCollectedBytes = %d, want 0 (nothing collected into oldgen)", st.LiveCollectedBytes)
+	}
+	if !hasDiagnostic(st, "size floor not applicable") {
+		t.Errorf("expected a diagnostic explaining the skipped floor, got %v", st.Diagnostics)
+	}
+}
+
+// Skipping the floor must not blind the check: once a database has collected
+// chunks, a truncated backup is still caught — measured against the collected
+// bytes, not the journal-inflated total.
+func TestInspectBackups_TruncatedBackupCaughtDespiteLargeJournal(t *testing.T) {
+	root := journalTown(t, "gt", 900_000, 500_000)
+	writeStore(t, filepath.Join(backupPath(root, "gt"), "gt-backup"), 1, 1_000) // 0.2% of collected
+
+	st := statusFor(t, root, "gt")
+	if !hasProblem(st, "truncated") {
+		t.Errorf("expected size-floor problem, got %v", st.Problems)
+	}
+}
+
+// A backup sized against collected bytes alone is healthy even when the journal
+// makes it look tiny next to the live total.
+func TestInspectBackups_SizeFloorMeasuredAgainstCollectedBytes(t *testing.T) {
+	root := journalTown(t, "gt", 900_000, 100_000)
+	writeStore(t, filepath.Join(backupPath(root, "gt"), "gt-backup"), 1, 90_000) // 9% of live total, 90% of collected
+
+	st := statusFor(t, root, "gt")
+	if !st.Healthy() {
+		t.Fatalf("expected healthy, got %v", st.Problems)
+	}
+}
+
+// An empty backup is still empty, whatever the live store's journal is doing.
+func TestInspectBackups_JournalDominatedLiveStoreStillFlagsEmptyBackup(t *testing.T) {
+	root := journalTown(t, "gt", 922_482, 0)
+	if err := os.MkdirAll(filepath.Join(backupPath(root, "gt"), "gt-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st := statusFor(t, root, "gt")
+	if !hasProblem(st, "backup is empty") {
+		t.Errorf("expected empty-backup problem, got %v", st.Problems)
 	}
 }
 

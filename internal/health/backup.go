@@ -14,15 +14,23 @@ const (
 	// before it is considered stale.
 	BackupStaleAfter = 2 * time.Hour
 
-	// minBackupSizeRatio is the fraction of the live database size a backup must
-	// reach to be plausible. A dolt file remote stores the same chunks as the
-	// live store, so a healthy backup lands in the same order of magnitude.
-	// Anything below this floor is a truncated or half-written backup.
+	// minBackupSizeRatio is the fraction of the live database's COLLECTED size a
+	// backup must reach to be plausible. A dolt file remote stores the same
+	// collected chunks as the live store, so a healthy backup lands in the same
+	// order of magnitude. Anything below this floor is a truncated or
+	// half-written backup. The live chunk journal is excluded from the
+	// comparison — see liveStoreSize.
 	minBackupSizeRatio = 0.10
 
 	// backupHashMarker is written by the backup patrol with the HEAD hash it
 	// last synced.
 	backupHashMarker = ".last-backup-hash"
+
+	// doltJournalFile is the name dolt gives the chunk journal inside
+	// .dolt/noms: a 32-character chunk-source name of all 'v's. journalIndexFile
+	// is its companion index.
+	doltJournalFile  = "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+	journalIndexFile = "journal.idx"
 )
 
 // ansiEscape matches SGR color sequences. `dolt log --oneline` colorizes the
@@ -40,18 +48,22 @@ const (
 
 // BackupStatus is the result of inspecting one database's filesystem backup.
 type BackupStatus struct {
-	Name          string        `json:"name"`
-	StorePath     string        `json:"store_path,omitempty"`
-	Layout        string        `json:"layout,omitempty"`
-	SizeBytes     int64         `json:"size_bytes"`
-	LiveSizeBytes int64         `json:"live_size_bytes,omitempty"`
-	ChunkFiles    int           `json:"chunk_files"`
-	HasManifest   bool          `json:"has_manifest"`
-	HeadHash      string        `json:"head_hash,omitempty"`
-	AgeSeconds    int           `json:"age_seconds"`
-	Age           time.Duration `json:"-"`
-	Problems      []string      `json:"problems,omitempty"`
-	Diagnostics   []string      `json:"diagnostics,omitempty"`
+	Name          string `json:"name"`
+	StorePath     string `json:"store_path,omitempty"`
+	Layout        string `json:"layout,omitempty"`
+	SizeBytes     int64  `json:"size_bytes"`
+	LiveSizeBytes int64  `json:"live_size_bytes,omitempty"`
+	// LiveCollectedBytes is the live store minus its uncompressed chunk
+	// journal — the only part of the live size a backup's compressed store can
+	// be compared against.
+	LiveCollectedBytes int64         `json:"live_collected_bytes,omitempty"`
+	ChunkFiles         int           `json:"chunk_files"`
+	HasManifest        bool          `json:"has_manifest"`
+	HeadHash           string        `json:"head_hash,omitempty"`
+	AgeSeconds         int           `json:"age_seconds"`
+	Age                time.Duration `json:"-"`
+	Problems           []string      `json:"problems,omitempty"`
+	Diagnostics        []string      `json:"diagnostics,omitempty"`
 }
 
 // Healthy reports whether the backup passed every check.
@@ -130,13 +142,26 @@ func inspectBackup(townRoot, dbBackupDir, name string, now time.Time, staleAfter
 		st.Problems = append(st.Problems, "has a manifest but no chunk files — backup holds no data")
 	}
 
-	// Size floor: a backup far smaller than the live database is truncated.
-	st.LiveSizeBytes = liveStoreSize(townRoot, name)
-	if st.HasManifest && st.ChunkFiles > 0 && st.LiveSizeBytes > 0 {
-		if floor := int64(float64(st.LiveSizeBytes) * minBackupSizeRatio); st.SizeBytes < floor {
-			st.Problems = append(st.Problems, fmt.Sprintf("is %s, only %.0f%% of the %s live database — backup looks truncated",
-				humanBytes(st.SizeBytes), 100*float64(st.SizeBytes)/float64(st.LiveSizeBytes), humanBytes(st.LiveSizeBytes)))
-		}
+	// Size floor: a backup far smaller than the live database is truncated. It
+	// has to compare like with like. The live store keeps recent writes in an
+	// UNCOMPRESSED chunk journal, while a backup holds only collected, compressed
+	// chunks, so a journal-dominated database — freshly created, or write-heavy
+	// and not yet collected into oldgen — makes a complete, current backup look
+	// like a 6% stub (gt-l8tz). Only the collected bytes are comparable; when the
+	// live store has none, the floor has nothing to say and stays quiet. An empty
+	// or wiped backup is still caught by the content checks above, which do not
+	// depend on size.
+	st.LiveSizeBytes, st.LiveCollectedBytes = liveStoreSize(townRoot, name)
+	switch {
+	case !st.HasManifest || st.ChunkFiles == 0 || st.LiveSizeBytes == 0:
+		// Nothing to compare: already reported, or the live db is not local.
+	case st.LiveCollectedBytes == 0:
+		st.Diagnostics = append(st.Diagnostics, fmt.Sprintf(
+			"live store is %s of uncompressed chunk journal with nothing collected into oldgen — size floor not applicable",
+			humanBytes(st.LiveSizeBytes)))
+	case st.SizeBytes < int64(float64(st.LiveCollectedBytes)*minBackupSizeRatio):
+		st.Problems = append(st.Problems, fmt.Sprintf("is %s, only %.0f%% of the %s collected in the live database — backup looks truncated",
+			humanBytes(st.SizeBytes), 100*float64(st.SizeBytes)/float64(st.LiveCollectedBytes), humanBytes(st.LiveCollectedBytes)))
 	}
 
 	if newest.IsZero() {
@@ -199,15 +224,38 @@ func isChunkFile(name string) bool {
 	return true
 }
 
-// liveStoreSize returns the on-disk size of the live database's chunk store, or
-// 0 if the database is not present locally.
-func liveStoreSize(townRoot, db string) int64 {
+// liveStoreSize returns the on-disk size of the live database's chunk store and
+// the collected part of it — the store minus its uncompressed chunk journal.
+// Both are 0 if the database is not present locally.
+//
+// Only the collected bytes can be weighed against a backup: dolt appends new
+// writes to the journal verbatim and only compresses them into chunk files when
+// it collects them into oldgen, whereas a backup store holds compressed chunks
+// exclusively. A database whose data still sits in the journal therefore dwarfs
+// its own complete backup.
+func liveStoreSize(townRoot, db string) (total, collected int64) {
 	noms := filepath.Join(townRoot, ".dolt-data", db, ".dolt", "noms")
 	if info, err := os.Stat(noms); err != nil || !info.IsDir() {
-		return 0
+		return 0, 0
 	}
-	size, _, _ := walkStore(noms)
-	return size
+	_ = filepath.Walk(noms, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil //nolint:nilerr // unreadable entries are skipped, not fatal
+		}
+		total += info.Size()
+		if isChunkFile(info.Name()) && !isJournalFile(info.Name()) {
+			collected += info.Size()
+		}
+		return nil
+	})
+	return total, collected
+}
+
+// isJournalFile reports whether a file in a live dolt store is the chunk
+// journal — the uncompressed write-ahead log — or its index. Note the journal's
+// name is itself valid base32, so isChunkFile matches it too.
+func isJournalFile(name string) bool {
+	return name == doltJournalFile || name == journalIndexFile
 }
 
 // readHashMarker reads the HEAD hash the backup patrol last synced. The marker
