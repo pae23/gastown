@@ -27,6 +27,12 @@ var (
 	pluginSyncSource   string
 	pluginSyncClean    bool
 	pluginSyncDryRun   bool
+	pluginSyncRef      string
+	pluginSyncWorktree bool
+	pluginSyncNoFetch  bool
+	pluginAuditJSON    bool
+	pluginAuditRef     string
+	pluginAuditNoFetch bool
 	pluginRecordPlugin string
 	pluginRecordResult string
 	pluginRecordTitle  string
@@ -110,20 +116,46 @@ Examples:
 
 var pluginSyncCmd = &cobra.Command{
 	Use:   "sync",
-	Short: "Sync plugins from source repo to runtime directories",
-	Long: `Copy plugins from the gastown source repository to runtime plugin directories.
+	Short: "Deploy plugins from origin/main to runtime directories",
+	Long: `Deploy plugins from the gastown repository to runtime plugin directories.
 
-By default, auto-detects the source by walking up from the current directory
-looking for a gastown repo, or checks known locations within the town.
+Plugins are deployed from a git ref (origin/main by default), NOT from a working
+tree. Runtime plugins are a deployment of merged code: sourcing them from whatever
+checkout you happen to be standing in lets a stale worktree silently re-deploy old
+plugins over new ones, and lets merged fixes never reach ~/gt/plugins at all.
 
 Syncs to town-level plugins (~/gt/plugins/) so all rigs see the latest plugins.
 
 Examples:
-  gt plugin sync                           # Auto-detect source, sync to town
+  gt plugin sync                           # Deploy origin/main to the town
+  gt plugin sync --ref v1.2.0              # Deploy a specific ref
+  gt plugin sync --no-fetch                # Use the local origin/main as-is
+  gt plugin sync --worktree                # Deploy the working tree (dev loop)
   gt plugin sync --source ./plugins        # Explicit source directory
   gt plugin sync --clean                   # Remove plugins not in source
   gt plugin sync --dry-run                 # Show what would happen`,
-	RunE: runPluginSync,
+	SilenceUsage: true,
+	RunE:         runPluginSync,
+}
+
+var pluginAuditCmd = &cobra.Command{
+	Use:   "audit",
+	Short: "Audit runtime plugins for staleness against origin/main",
+	Long: `Compare every plugin in the town runtime directory against a git ref.
+
+Reports plugins whose deployed content differs from the ref (stale), plugins on
+the ref that were never deployed (missing), and plugins in the runtime with no
+counterpart on the ref (orphaned).
+
+Exits non-zero when any plugin is stale or missing, so patrols and CI can gate
+on it.
+
+Examples:
+  gt plugin audit                # Audit ~/gt/plugins against origin/main
+  gt plugin audit --json         # Machine-readable report
+  gt plugin audit --ref v1.2.0   # Audit against a specific ref`,
+	SilenceUsage: true,
+	RunE:         runPluginAudit,
 }
 
 var pluginHistoryCmd = &cobra.Command{
@@ -176,9 +208,17 @@ func init() {
 	pluginRecordRunCmd.Flags().StringArrayVarP(&pluginRecordLabels, "label", "l", nil, "Additional label for the receipt")
 
 	// Sync subcommand flags
-	pluginSyncCmd.Flags().StringVar(&pluginSyncSource, "source", "", "Source plugins directory (auto-detected if omitted)")
+	pluginSyncCmd.Flags().StringVar(&pluginSyncSource, "source", "", "Explicit source plugins directory (overrides --ref)")
+	pluginSyncCmd.Flags().StringVar(&pluginSyncRef, "ref", plugin.DefaultRef, "Git ref to deploy from")
+	pluginSyncCmd.Flags().BoolVar(&pluginSyncWorktree, "worktree", false, "Deploy from the working tree instead of a git ref (dev loop)")
+	pluginSyncCmd.Flags().BoolVar(&pluginSyncNoFetch, "no-fetch", false, "Don't fetch the ref before deploying")
 	pluginSyncCmd.Flags().BoolVar(&pluginSyncClean, "clean", false, "Remove plugins from target that don't exist in source")
 	pluginSyncCmd.Flags().BoolVar(&pluginSyncDryRun, "dry-run", false, "Show what would happen without syncing")
+
+	// Audit subcommand flags
+	pluginAuditCmd.Flags().BoolVar(&pluginAuditJSON, "json", false, "Output as JSON")
+	pluginAuditCmd.Flags().StringVar(&pluginAuditRef, "ref", plugin.DefaultRef, "Git ref to audit against")
+	pluginAuditCmd.Flags().BoolVar(&pluginAuditNoFetch, "no-fetch", false, "Don't fetch the ref before auditing")
 
 	// Add subcommands
 	pluginCmd.AddCommand(pluginListCmd)
@@ -187,6 +227,7 @@ func init() {
 	pluginCmd.AddCommand(pluginHistoryCmd)
 	pluginCmd.AddCommand(pluginRecordRunCmd)
 	pluginCmd.AddCommand(pluginSyncCmd)
+	pluginCmd.AddCommand(pluginAuditCmd)
 
 	rootCmd.AddCommand(pluginCmd)
 }
@@ -515,29 +556,55 @@ func runPluginRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// resolvePluginSource resolves the plugin tree to deploy from.
+//
+// Default is a git ref (origin/main), exported to a temp dir. --source and
+// --worktree opt into a working tree, which is a dev-loop convenience: a
+// working tree can sit behind main, so it is never the default.
+//
+// The returned cleanup must be called by the caller.
+func resolvePluginSource(townRoot, ref string, worktree, noFetch bool) (sourceDir, label string, cleanup func(), err error) {
+	noop := func() {}
+
+	if pluginSyncSource != "" {
+		abs, err := filepath.Abs(pluginSyncSource)
+		if err != nil {
+			return "", "", noop, fmt.Errorf("resolving source path: %w", err)
+		}
+		return abs, style.Dim.Render(abs), noop, nil
+	}
+
+	if worktree {
+		dir, err := plugin.FindGastownSource(townRoot)
+		if err != nil {
+			return "", "", noop, err
+		}
+		return dir, style.Dim.Render(dir + " (working tree)"), noop, nil
+	}
+
+	repo, err := plugin.FindGastownRepo(townRoot)
+	if err != nil {
+		return "", "", noop, fmt.Errorf("%w; use --source or --worktree to deploy from a directory", err)
+	}
+
+	src, err := plugin.ExportPluginsFromRef(repo, ref, !noFetch)
+	if err != nil {
+		return "", "", noop, err
+	}
+	return src.Dir, style.Dim.Render(src.Describe()), func() { _ = src.Close() }, nil
+}
+
 func runPluginSync(cmd *cobra.Command, args []string) error {
 	townRoot, err := workspace.FindFromCwdOrError()
 	if err != nil {
 		return fmt.Errorf("not in a Gas Town workspace: %w", err)
 	}
 
-	// Determine source directory
-	sourceDir := pluginSyncSource
-	if sourceDir == "" {
-		sourceDir, err = plugin.FindGastownSource(townRoot)
-		if err != nil {
-			return err
-		}
+	sourceDir, sourceLabel, cleanup, err := resolvePluginSource(townRoot, pluginSyncRef, pluginSyncWorktree, pluginSyncNoFetch)
+	if err != nil {
+		return err
 	}
-
-	// Resolve to absolute path
-	if !filepath.IsAbs(sourceDir) {
-		abs, err := filepath.Abs(sourceDir)
-		if err != nil {
-			return fmt.Errorf("resolving source path: %w", err)
-		}
-		sourceDir = abs
-	}
+	defer cleanup()
 
 	targetDir := filepath.Join(townRoot, "plugins")
 
@@ -548,7 +615,7 @@ func runPluginSync(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Printf("%s Plugin sync dry run\n", style.Bold.Render("Plugin sync:"))
-		fmt.Printf("  Source: %s\n", sourceDir)
+		fmt.Printf("  Source: %s\n", sourceLabel)
 		fmt.Printf("  Target: %s\n\n", targetDir)
 
 		if !report.HasDrift() && len(report.Extra) == 0 {
@@ -581,7 +648,7 @@ func runPluginSync(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%s Synced plugins from %s\n", style.Success.Render("●"), style.Dim.Render(sourceDir))
+	fmt.Printf("%s Synced plugins from %s\n", style.Success.Render("●"), sourceLabel)
 	for _, name := range result.Copied {
 		fmt.Printf("  %s %s\n", style.Success.Render("↑"), name)
 	}
@@ -597,6 +664,105 @@ func runPluginSync(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// pluginAuditReport is the machine-readable result of `gt plugin audit`.
+type pluginAuditReport struct {
+	Runtime  string   `json:"runtime"`
+	Ref      string   `json:"ref"`
+	Commit   string   `json:"commit"`
+	Stale    []string `json:"stale"`    // deployed, but content differs from the ref
+	Missing  []string `json:"missing"`  // on the ref, never deployed
+	Orphaned []string `json:"orphaned"` // deployed, but absent from the ref
+	Clean    bool     `json:"clean"`
+}
+
+func runPluginAudit(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	repo, err := plugin.FindGastownRepo(townRoot)
+	if err != nil {
+		return err
+	}
+
+	src, err := plugin.ExportPluginsFromRef(repo, pluginAuditRef, !pluginAuditNoFetch)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	targetDir := filepath.Join(townRoot, "plugins")
+	drift, err := plugin.DetectDrift(src.Dir, targetDir)
+	if err != nil {
+		return fmt.Errorf("auditing plugins: %w", err)
+	}
+
+	report := pluginAuditReport{
+		Runtime:  targetDir,
+		Ref:      src.Ref,
+		Commit:   src.Commit,
+		Stale:    make([]string, 0, len(drift.Drifted)),
+		Missing:  drift.Missing,
+		Orphaned: drift.Extra,
+		Clean:    !drift.HasDrift(),
+	}
+	for _, d := range drift.Drifted {
+		report.Stale = append(report.Stale, d.Name)
+	}
+	if report.Missing == nil {
+		report.Missing = []string{}
+	}
+	if report.Orphaned == nil {
+		report.Orphaned = []string{}
+	}
+	sort.Strings(report.Stale)
+	sort.Strings(report.Missing)
+	sort.Strings(report.Orphaned)
+
+	if pluginAuditJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		printPluginAudit(report, src.Describe())
+	}
+
+	if !report.Clean {
+		return fmt.Errorf("%d plugin(s) out of date with %s; run 'gt plugin sync'",
+			len(report.Stale)+len(report.Missing), src.Ref)
+	}
+	return nil
+}
+
+func printPluginAudit(report pluginAuditReport, source string) {
+	fmt.Printf("%s %s\n", style.Bold.Render("Plugin audit:"), source)
+	fmt.Printf("  Runtime: %s\n\n", report.Runtime)
+
+	for _, name := range report.Stale {
+		fmt.Printf("  %s %s %s\n", style.Error.Render("✗"), name,
+			style.Dim.Render("stale — deployed content differs from ref"))
+	}
+	for _, name := range report.Missing {
+		fmt.Printf("  %s %s %s\n", style.Warning.Render("+"), name,
+			style.Dim.Render("missing — on ref, never deployed"))
+	}
+	for _, name := range report.Orphaned {
+		fmt.Printf("  %s %s %s\n", style.Dim.Render("○"), name,
+			style.Dim.Render("orphaned — deployed, absent from ref"))
+	}
+
+	if report.Clean && len(report.Orphaned) == 0 {
+		fmt.Printf("  %s All runtime plugins match the ref\n", style.Success.Render("✓"))
+		return
+	}
+	if report.Clean {
+		fmt.Printf("\n  %s Deployed plugins match the ref\n", style.Success.Render("✓"))
+	}
 }
 
 func runPluginHistory(cmd *cobra.Command, args []string) error {

@@ -422,11 +422,13 @@ func (c *PatrolPluginsAccessibleCheck) Fix(ctx *CheckContext) error {
 	return nil
 }
 
-// PatrolPluginDriftCheck detects when runtime plugins are out of sync with source.
+// PatrolPluginDriftCheck detects when runtime plugins are out of sync with the
+// deployment ref (origin/main).
 type PatrolPluginDriftCheck struct {
 	FixableCheck
 	sourceDir string
 	targetDir string
+	source    string // human label for the ref the plugins came from
 }
 
 // NewPatrolPluginDriftCheck creates a new plugin drift check.
@@ -442,32 +444,52 @@ func NewPatrolPluginDriftCheck() *PatrolPluginDriftCheck {
 	}
 }
 
-// Run checks for plugin drift between source and runtime.
+// exportDeployRef exports the plugin tree of the deployment ref from the town's
+// gastown repo. A fetch failure (offline, auth) degrades to the local copy of
+// the ref rather than failing the check, but is reported so the operator knows
+// the comparison may be behind the remote.
+func exportDeployRef(townRoot string) (src *plugin.GitSource, fetchNote string, err error) {
+	repo, err := plugin.FindGastownRepo(townRoot)
+	if err != nil {
+		return nil, "", err
+	}
+
+	src, err = plugin.ExportPluginsFromRef(repo, plugin.DefaultRef, true)
+	if err == nil {
+		return src, "", nil
+	}
+
+	fetchErr := err
+	src, err = plugin.ExportPluginsFromRef(repo, plugin.DefaultRef, false)
+	if err != nil {
+		return nil, "", err
+	}
+	return src, fmt.Sprintf("could not refresh %s, compared against the local copy: %v", plugin.DefaultRef, fetchErr), nil
+}
+
+// Run checks for drift between the deployment ref and the runtime plugins.
 func (c *PatrolPluginDriftCheck) Run(ctx *CheckContext) *CheckResult {
 	c.targetDir = filepath.Join(ctx.TownRoot, "plugins")
 
-	sourceDir, err := plugin.FindGastownSource(ctx.TownRoot)
+	src, fetchNote, err := exportDeployRef(ctx.TownRoot)
 	if err != nil {
+		// Not being able to resolve the deploy ref means plugin staleness is
+		// unverifiable. Reporting OK here is what let ~/gt/plugins run a
+		// 3-month-old dolt-backup while patrol reported green.
 		return &CheckResult{
 			Name:    c.Name(),
-			Status:  StatusOK,
-			Message: "Plugin source not found (skipping drift check)",
+			Status:  StatusWarning,
+			Message: "Cannot verify runtime plugins against " + plugin.DefaultRef,
+			Details: []string{err.Error()},
+			FixHint: "Ensure the gastown repo is present, then run 'gt plugin audit'",
 		}
 	}
-	c.sourceDir = sourceDir
+	defer func() { _ = src.Close() }()
 
-	// Skip if source and target are the same directory
-	srcAbs, _ := filepath.Abs(sourceDir)
-	tgtAbs, _ := filepath.Abs(c.targetDir)
-	if srcAbs == tgtAbs {
-		return &CheckResult{
-			Name:    c.Name(),
-			Status:  StatusOK,
-			Message: "Source and runtime are same directory",
-		}
-	}
+	c.sourceDir = src.Dir
+	c.source = src.Describe()
 
-	report, err := plugin.DetectDrift(sourceDir, c.targetDir)
+	report, err := plugin.DetectDrift(src.Dir, c.targetDir)
 	if err != nil {
 		return &CheckResult{
 			Name:    c.Name(),
@@ -477,37 +499,68 @@ func (c *PatrolPluginDriftCheck) Run(ctx *CheckContext) *CheckResult {
 		}
 	}
 
-	if !report.HasDrift() {
-		return &CheckResult{
-			Name:    c.Name(),
-			Status:  StatusOK,
-			Message: "Runtime plugins match source",
-		}
+	var details []string
+	if fetchNote != "" {
+		details = append(details, fetchNote)
 	}
 
-	var details []string
 	for _, d := range report.Drifted {
-		details = append(details, fmt.Sprintf("%s: content differs", d.Name))
+		details = append(details, fmt.Sprintf("%s: deployed content differs from %s", d.Name, src.Ref))
 	}
 	for _, name := range report.Missing {
 		details = append(details, fmt.Sprintf("%s: missing from runtime", name))
+	}
+	// A plugin deleted from the ref but still deployed keeps running. Deleting a
+	// plugin is how a dangerous one gets disabled, so an orphan is reported even
+	// though Fix will not remove it: that deletion needs a human.
+	for _, name := range report.Extra {
+		details = append(details, fmt.Sprintf("%s: deployed but absent from %s (remove with 'gt plugin sync --clean')", name, src.Ref))
+	}
+
+	if !report.HasDrift() && len(report.Extra) == 0 {
+		status := StatusOK
+		if fetchNote != "" {
+			status = StatusWarning
+		}
+		return &CheckResult{
+			Name:    c.Name(),
+			Status:  status,
+			Message: fmt.Sprintf("Runtime plugins match %s", c.source),
+			Details: details,
+		}
+	}
+
+	stale := len(report.Drifted) + len(report.Missing)
+	message := fmt.Sprintf("%d plugin(s) out of date with %s", stale, c.source)
+	if stale == 0 {
+		message = fmt.Sprintf("%d plugin(s) deployed but absent from %s", len(report.Extra), c.source)
 	}
 
 	return &CheckResult{
 		Name:    c.Name(),
 		Status:  StatusWarning,
-		Message: fmt.Sprintf("%d plugin(s) out of sync", len(report.Drifted)+len(report.Missing)),
+		Message: message,
 		Details: details,
-		FixHint: "Run 'gt plugin sync' to update runtime plugins",
+		FixHint: "Run 'gt plugin sync' to deploy the merged plugins",
 	}
 }
 
-// Fix syncs plugins from source to runtime.
+// Fix deploys the plugin tree of the deployment ref to the runtime.
+//
+// The ref is re-exported rather than reusing Run's tree: Run's export is a temp
+// directory that it removes on return.
 func (c *PatrolPluginDriftCheck) Fix(ctx *CheckContext) error {
-	if c.sourceDir == "" || c.targetDir == "" {
+	if c.targetDir == "" {
 		return fmt.Errorf("drift check did not run; cannot fix")
 	}
-	_, err := plugin.SyncPlugins(c.sourceDir, c.targetDir, false)
+
+	src, _, err := exportDeployRef(ctx.TownRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	_, err = plugin.SyncPlugins(src.Dir, c.targetDir, false)
 	return err
 }
 

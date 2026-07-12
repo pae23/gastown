@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plugins deploy from `origin/main`, not a working tree** (gt-wz77). `gt plugin sync`
+  and the `patrol-plugin-drift` doctor check resolved their source by walking up from the
+  current directory, so runtime plugins in `~/gt/plugins` were only ever updated when
+  someone happened to run a sync from a checkout — a merge to main deployed nothing. Both
+  now export the plugin tree from a git ref (`origin/main` by default) out of the town's
+  gastown repo. `--worktree` restores the old working-tree behaviour for dev loops.
+- **The plugin drift check no longer reports OK when it cannot verify** (gt-wz77). It
+  returned `StatusOK` ("Plugin source not found") whenever the source could not be
+  resolved, which is how a three-month-old plugin ran while patrol reported green. It now
+  warns, and it reports plugins that are deployed but deleted from the ref.
+
+### Added
+
+- **`gt plugin audit`** (gt-wz77) — compares every plugin in `~/gt/plugins` against
+  `origin/main` and reports stale, undeployed, and orphaned plugins. Exits non-zero when
+  the runtime is out of date, so patrols and CI can gate on it.
+
 ## [1.2.1] - 2026-06-06
 
 ### Fixed
