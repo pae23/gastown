@@ -55,8 +55,31 @@ type WorkstateDisposition struct {
 	Blockers             []string `json:"blockers,omitempty"`
 }
 
-// DecideWorkstate returns the canonical disposition for a polecat.
+// DecideWorkstate returns the canonical disposition for a polecat. It is the
+// single decision function behind every destructive and advisory caller
+// (list, check-recovery, nuke, reuse, capacity), so a refusal it reports to one
+// caller is a refusal for all of them.
+//
+// Invariant: a disposition that is not safe to nuke always names at least one
+// blocker. A refusal nobody can attribute to a predicate is unactionable, and
+// callers must never be able to read silence as consent.
 func DecideWorkstate(in WorkstateInput) WorkstateDisposition {
+	d := decideWorkstate(in)
+	if !d.SafeToNuke && len(d.Blockers) == 0 {
+		reason := d.Reason
+		if reason == "" {
+			reason = "unspecified"
+		}
+		state := string(in.State)
+		if state == "" {
+			state = "unknown"
+		}
+		d.Blockers = []string{"polecat_state=" + state + " reason=" + reason}
+	}
+	return d
+}
+
+func decideWorkstate(in WorkstateInput) WorkstateDisposition {
 	if in.ActiveMRBlocker != "" && !in.PushFailed && !in.MRFailed && in.State == StateDone {
 		return WorkstateDisposition{
 			Verdict:     WorkstateVerdictPendingMR,
@@ -66,7 +89,11 @@ func DecideWorkstate(in WorkstateInput) WorkstateDisposition {
 		}
 	}
 
-	if in.State != StateIdle {
+	// StateDone is the expected pre-cleanup state: the polecat called `gt done`
+	// and is waiting to be nuked. It runs the same predicate checklist as an idle
+	// polecat — only a real predicate (hook, dirty git, unsubmitted work, pending
+	// MR) may refuse cleanup, never the state alone.
+	if in.State != StateIdle && in.State != StateDone {
 		verdict := WorkstateVerdictNeedsRecovery
 		needsRecovery := true
 		if in.State == StateWorking {
@@ -185,8 +212,18 @@ func DecideWorkstate(in WorkstateInput) WorkstateDisposition {
 		}
 	}
 
-	d.Reusable = true
 	d.SafeToNuke = true
+	if in.State == StateDone {
+		// Cleared every predicate, but a done polecat's sandbox belongs to finished
+		// work: it may be nuked, not reused in place. It still holds a worktree, so
+		// it keeps counting toward capacity until the nuke lands.
+		d.Reason = "done-safe-to-nuke"
+		d.CountsTowardCapacity = true
+		d.ReuseStatus = "idle-done"
+		return d
+	}
+
+	d.Reusable = true
 	d.Reason = "reusable"
 	if strings.HasPrefix(in.Branch, "polecat/") {
 		d.ReuseStatus = "idle-preserved"

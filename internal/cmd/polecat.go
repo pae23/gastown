@@ -1024,33 +1024,38 @@ type RecoveryStatus struct {
 	Issue                string                `json:"issue,omitempty"`
 	MQStatus             string                `json:"mq_status,omitempty"` // "submitted", "not_submitted", "not_required", "unknown"
 	ActiveMR             string                `json:"active_mr,omitempty"`
+	OpenMR               string                `json:"open_mr,omitempty"`
+	HookBead             string                `json:"hook_bead,omitempty"`
+	HookStale            bool                  `json:"hook_stale,omitempty"`
+	GitState             *GitState             `json:"-"`
 	Blockers             []string              `json:"blockers,omitempty"`
 	Diagnostics          []string              `json:"diagnostics,omitempty"`
 	RecoveryActions      []string              `json:"recovery_actions,omitempty"`
 	Reconciled           bool                  `json:"reconciled,omitempty"`
 }
 
-func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
-	rigName, polecatName, err := parseAddress(args[0])
-	if err != nil {
-		return err
-	}
+// polecatRecoveryAssessment is one polecat's recovery decision plus the handles
+// its callers need afterwards. Every caller that must decide whether a polecat's
+// sandbox may be destroyed — `check-recovery`, `nuke`, and nuke's dry-run —
+// goes through assessPolecatRecovery, so they cannot reach opposite verdicts on
+// the same polecat.
+type polecatRecoveryAssessment struct {
+	Status      RecoveryStatus
+	Polecat     *polecat.Polecat
+	Beads       *beads.Beads
+	AgentBeadID string
+	Fields      *beads.AgentFields
+}
 
-	mgr, r, err := getPolecatManager(rigName)
-	if err != nil {
-		return err
-	}
-
-	// Verify polecat exists and get info
+func assessPolecatRecovery(rigName, polecatName string, mgr *polecat.Manager, r *rig.Rig) (*polecatRecoveryAssessment, error) {
 	p, err := mgr.Get(polecatName)
 	if err != nil {
-		return fmt.Errorf("polecat '%s' not found in rig '%s'", polecatName, rigName)
+		return nil, fmt.Errorf("polecat '%s' not found in rig '%s'", polecatName, rigName)
 	}
 
 	// Get cleanup_status from agent bead
 	// We need to read it directly from beads since manager doesn't expose it
-	rigPath := r.Path
-	bd := beads.New(rigPath)
+	bd := beads.New(r.Path)
 	agentBeadID := polecatBeadIDForRig(r, rigName, polecatName)
 	agentIssue, fields, err := bd.GetAgentBead(agentBeadID)
 
@@ -1102,6 +1107,8 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 		input.ActiveMR = fields.ActiveMR
 		hookBead := agentHookBead(agentIssue, fields)
 		hookSafe, hookTerminal, hookBlocker := hookBeadSafeForCleanup(bd, hookBead)
+		status.HookBead = hookBead
+		status.HookStale = hookBead != "" && hookTerminal
 		workTerminal = beadTerminal || hookTerminal
 		sourceHint := agentSourceIssueHint(status.Issue, fields)
 		targetRefs, targetRefLookupFailed = recoveryTargetRefs(bd, status.Issue, status.ActiveMR, status.Branch, sourceHint)
@@ -1161,11 +1168,62 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 
 	status.CleanupStatus = input.CleanupStatus
 	applyMQFactsToWorkstateInput(&input, &status, bd, workTerminal, p.ClonePath, targetRefs, targetRefLookupFailed, gitState, gitErr)
+	applyOpenMRToWorkstateInput(&input, &status, bd)
+	loadGitState()
+	status.GitState = gitState
 	disposition := polecat.DecideWorkstate(input)
 	applyWorkstateDispositionToRecoveryStatus(&status, disposition)
 
+	return &polecatRecoveryAssessment{
+		Status:      status,
+		Polecat:     p,
+		Beads:       bd,
+		AgentBeadID: agentBeadID,
+		Fields:      fields,
+	}, nil
+}
+
+// applyOpenMRToWorkstateInput refuses cleanup while an open MR bead still points
+// at the polecat's branch: the refinery has not landed the work yet, so the
+// sandbox and branch must survive. A failed lookup is not silence — it blocks.
+func applyOpenMRToWorkstateInput(input *polecat.WorkstateInput, status *RecoveryStatus, bd *beads.Beads) {
+	if status.Branch == "" {
+		return
+	}
+	mr, err := bd.FindMRForBranch(status.Branch)
+	if err != nil {
+		input.MQLookupFailed = true
+		status.Diagnostics = append(status.Diagnostics, fmt.Sprintf("open_mr_lookup_error: %v", err))
+		return
+	}
+	if mr == nil {
+		return
+	}
+	status.OpenMR = mr.ID
+	if input.ActiveMRBlocker == "" {
+		input.ActiveMRBlocker = fmt.Sprintf("open_mr=%s status=%s", mr.ID, mr.Status)
+	}
+}
+
+func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
+	rigName, polecatName, err := parseAddress(args[0])
+	if err != nil {
+		return err
+	}
+
+	mgr, r, err := getPolecatManager(rigName)
+	if err != nil {
+		return err
+	}
+
+	assessment, err := assessPolecatRecovery(rigName, polecatName, mgr, r)
+	if err != nil {
+		return err
+	}
+	status := assessment.Status
+
 	if polecatCheckRecoveryReconcileCleanup {
-		reconcileCleanupStatusIfSafe(&status, bd, agentBeadID, p, fields)
+		reconcileCleanupStatusIfSafe(&status, assessment.Beads, assessment.AgentBeadID, assessment.Polecat, assessment.Fields)
 	}
 
 	// JSON output
@@ -1219,7 +1277,10 @@ func runPolecatCheckRecovery(cmd *cobra.Command, args []string) error {
 				}
 			}
 		} else {
-			fmt.Printf("  %s Cleanup refused by an unknown recovery predicate.\n", style.Warning.Render("⚠"))
+			// DecideWorkstate guarantees a named blocker for every refusal, so this
+			// is only reachable if that invariant regresses. Name what we do know.
+			fmt.Printf("  %s Cleanup refused (reason=%s) but no predicate was reported — this is a bug in the recovery decision.\n",
+				style.Warning.Render("⚠"), status.Reason)
 		}
 		fmt.Println("  Escalate to Mayor for recovery before cleanup.")
 	default:
@@ -1458,19 +1519,6 @@ func recoveryActionsForBlockers(blockers []string) []string {
 		}
 	}
 	return nil
-}
-
-func activeMRBlocker(bd issueShower, mrID, sourceHint string, requireGitSafe, gitSafe bool) string {
-	assessment := polecat.AssessActiveMR(bd, polecat.ActiveMRInput{
-		ActiveMR:        mrID,
-		SourceIssueHint: sourceHint,
-		RequireGitSafe:  requireGitSafe,
-		GitSafe:         gitSafe,
-	})
-	if assessment.Pending {
-		return assessment.Reason
-	}
-	return ""
 }
 
 func hasSubmittableWorkForRecovery(worktreePath string, targetRefs []string, gitState *GitState, gitErr error) bool {
@@ -1864,6 +1912,13 @@ type nukePolecatOptions struct {
 }
 
 func nukePolecatFullWithOptions(polecatName, rigName string, mgr *polecat.Manager, r *rig.Rig, opts nukePolecatOptions) error {
+	// The recovery gate lives in the destruction funnel, not in its callers, so no
+	// cleanup path can reach the worktree by simply forgetting to ask. `gt polecat
+	// nuke` checks the whole batch up front for a better error; `polecat stale
+	// --cleanup` has no check of its own and relies entirely on this one.
+	if err := checkNukeRecoverySafety(polecatName, rigName, mgr, r, opts.Force); err != nil {
+		return err
+	}
 	if err := checkNukeActiveMRSafety(mgr, polecatName, rigName, opts.Force); err != nil {
 		return err
 	}
@@ -1961,6 +2016,23 @@ func nukePolecatFullWithOptions(polecatName, rigName string, mgr *polecat.Manage
 	}
 
 	return nil
+}
+
+// checkNukeRecoverySafety refuses destruction whenever `gt polecat check-recovery`
+// would refuse it, naming the same predicates. Before gt-hf8k the two commands ran
+// separate checklists and disagreed on the same polecat: check-recovery refused
+// while nuke — the command that actually deletes the worktree — permitted, because
+// its checklist had no notion of the predicate and read silence as a pass.
+func checkNukeRecoverySafety(polecatName, rigName string, mgr *polecat.Manager, r *rig.Rig, force bool) error {
+	if force || mgr == nil || r == nil {
+		return nil
+	}
+	result := checkPolecatSafety(polecatTarget{rigName: rigName, polecatName: polecatName, mgr: mgr, r: r})
+	if !result.Blocked {
+		return nil
+	}
+	return fmt.Errorf("cannot nuke %s/%s: %s (%s)\nRun 'gt polecat check-recovery %s/%s' for detail\nUse --force to override (risks losing work)",
+		rigName, polecatName, result.Verdict, strings.Join(result.Reasons, "; "), rigName, polecatName)
 }
 
 type activeMRRemovalChecker interface {

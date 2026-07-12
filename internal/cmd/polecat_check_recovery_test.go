@@ -606,35 +606,6 @@ func TestStaleCleanWithRealUnpushedStillBlocks(t *testing.T) {
 	}
 }
 
-func TestActiveMRBlocker(t *testing.T) {
-	tests := []struct {
-		name       string
-		mrID       string
-		sourceHint string
-		bd         issueShower
-		want       string
-	}{
-		{name: "empty", want: ""},
-		{name: "closed terminal source", mrID: "mr-1", sourceHint: "gt-closed", bd: fakeIssueMapShower{issues: map[string]*beads.Issue{"mr-1": &beads.Issue{ID: "mr-1", Status: "closed"}, "gt-closed": &beads.Issue{ID: "gt-closed", Status: "closed"}}}, want: ""},
-		{name: "closed unknown source", mrID: "mr-1", bd: fakeIssueMapShower{issues: map[string]*beads.Issue{"mr-1": &beads.Issue{ID: "mr-1", Status: "closed"}}}, want: "active_mr=mr-1 status=closed source_issue=<missing>"},
-		{name: "open", mrID: "mr-1", bd: fakeIssueShower{issue: &beads.Issue{ID: "mr-1", Status: "open"}}, want: "active_mr=mr-1 status=open"},
-		{name: "missing terminal source", mrID: "mr-1", sourceHint: "gt-closed", bd: fakeIssueMapShower{issues: map[string]*beads.Issue{"gt-closed": &beads.Issue{ID: "gt-closed", Status: "closed"}}}, want: ""},
-		{name: "missing unknown source", mrID: "mr-1", bd: fakeIssueMapShower{}, want: "active_mr=mr-1 status=missing source_issue=<missing>"},
-		{name: "nil issue unknown source", mrID: "mr-1", bd: fakeIssueShower{issue: nil}, want: "active_mr=mr-1 status=missing source_issue=<missing>"},
-		{name: "nil reader", mrID: "mr-1", bd: nil, want: "active_mr=mr-1 status=unverified"},
-		{name: "lookup error", mrID: "mr-1", bd: fakeIssueShower{err: errors.New("bd exploded")}, want: "active_mr=mr-1 status=lookup_error: bd exploded"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := activeMRBlocker(tt.bd, tt.mrID, tt.sourceHint, false, false)
-			if got != tt.want {
-				t.Errorf("activeMRBlocker() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFormatSafetyCheckBlockers(t *testing.T) {
 	blocked := []*SafetyCheckResult{
 		{Polecat: "gastown/fury", Reasons: []string{"cleanup_status=unknown", "active_mr=hq-wisp-1 status=open"}},
@@ -861,5 +832,69 @@ func runCmd(t *testing.T, dir, name string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+	}
+}
+
+// TestSafetyCheckFromRecoveryAgreesWithCheckRecovery locks gt-hf8k: `gt polecat
+// nuke` and `gt polecat check-recovery` must never reach opposite conclusions on
+// the same polecat. Nuke is the destructive command, so it may not be the more
+// permissive of the two — anything short of SAFE_TO_NUKE blocks it, and it repeats
+// that verdict's own predicates rather than inventing a checklist of its own.
+func TestSafetyCheckFromRecoveryAgreesWithCheckRecovery(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      RecoveryStatus
+		wantBlocked bool
+		wantReasons []string
+	}{
+		{
+			name:        "safe to nuke permits destruction",
+			status:      RecoveryStatus{Verdict: "SAFE_TO_NUKE", SafeToNuke: true, Reason: "done-safe-to-nuke"},
+			wantBlocked: false,
+		},
+		{
+			name:        "needs recovery refuses with the named predicates",
+			status:      RecoveryStatus{Verdict: "NEEDS_RECOVERY", NeedsRecovery: true, Reason: "git-stash", Blockers: []string{"git_state=has_stash stash_count=2"}},
+			wantBlocked: true,
+			wantReasons: []string{"git_state=has_stash stash_count=2"},
+		},
+		{
+			name:        "pending mr refuses",
+			status:      RecoveryStatus{Verdict: "PENDING_MR", Reason: "active-mr-open", Blockers: []string{"active_mr=gt-mr-1 status=open"}},
+			wantBlocked: true,
+			wantReasons: []string{"active_mr=gt-mr-1 status=open"},
+		},
+		{
+			name:        "unsubmitted work refuses rather than orphan the branch",
+			status:      RecoveryStatus{Verdict: "NEEDS_MQ_SUBMIT", NeedsRecovery: true, NeedsMQSubmit: true, Reason: "mq-not-submitted", Blockers: []string{"mq_status=not_submitted"}},
+			wantBlocked: true,
+			wantReasons: []string{"mq_status=not_submitted"},
+		},
+		{
+			name:        "refusal without blockers still reports a reason",
+			status:      RecoveryStatus{Verdict: "NEEDS_RECOVERY", NeedsRecovery: true, Reason: "not-idle"},
+			wantBlocked: true,
+			wantReasons: []string{"verdict=NEEDS_RECOVERY reason=not-idle"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := safetyCheckFromRecovery("gastown/furiosa", tt.status)
+			if got.Blocked != tt.wantBlocked {
+				t.Fatalf("safetyCheckFromRecovery() blocked = %v, want %v (verdict %s)", got.Blocked, tt.wantBlocked, tt.status.Verdict)
+			}
+			if got.Blocked && len(got.Reasons) == 0 {
+				t.Fatal("safetyCheckFromRecovery() blocked the nuke without naming a predicate")
+			}
+			if len(got.Reasons) != len(tt.wantReasons) {
+				t.Fatalf("safetyCheckFromRecovery() reasons = %v, want %v", got.Reasons, tt.wantReasons)
+			}
+			for i := range tt.wantReasons {
+				if got.Reasons[i] != tt.wantReasons[i] {
+					t.Errorf("safetyCheckFromRecovery() reason[%d] = %q, want %q", i, got.Reasons[i], tt.wantReasons[i])
+				}
+			}
+		})
 	}
 }

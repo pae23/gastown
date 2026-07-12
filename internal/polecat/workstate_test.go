@@ -104,14 +104,29 @@ func TestDecideWorkstateCanonicalFields(t *testing.T) {
 			want: WorkstateDisposition{Verdict: WorkstateVerdictPendingMR, Reason: "active-mr-open", ReuseStatus: "idle-pr-open", Blockers: []string{"active_mr=gt-mr-open status=open"}},
 		},
 		{
-			name: "done without mr blocks reuse until cleanup",
+			name: "done with every predicate clear is safe to nuke but not reusable",
 			in:   WorkstateInput{State: StateDone, CleanupStatus: CleanupClean},
-			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "not-idle", NeedsRecovery: true, CountsTowardCapacity: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictSafeToNuke, Reason: "done-safe-to-nuke", SafeToNuke: true, CountsTowardCapacity: true, ReuseStatus: "idle-done"},
+		},
+		{
+			name: "done still refuses on a real predicate",
+			in:   WorkstateInput{State: StateDone, CleanupStatus: CleanupClean, HookBead: "gt-open"},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "hook-still-set", NeedsRecovery: true, CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed", Blockers: []string{"has work on hook (gt-open)"}},
+		},
+		{
+			name: "done with unsubmitted work refuses rather than orphan it",
+			in:   WorkstateInput{State: StateDone, CleanupStatus: CleanupClean, Branch: "polecat/rictus", MQCheckRequired: true, HasSubmittableWork: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsMQSubmit, Reason: "mq-not-submitted", NeedsRecovery: true, NeedsMQSubmit: true, MQStatus: "not_submitted", CountsTowardCapacity: true, ReuseStatus: "idle-recovery-needed", Blockers: []string{"mq_status=not_submitted"}},
 		},
 		{
 			name: "working counts as working capacity",
 			in:   WorkstateInput{State: StateWorking, CleanupStatus: CleanupClean},
-			want: WorkstateDisposition{Verdict: WorkstateVerdictWorking, Reason: "not-idle", NeedsRecovery: false, CountsTowardCapacity: true},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictWorking, Reason: "not-idle", NeedsRecovery: false, CountsTowardCapacity: true, Blockers: []string{"polecat_state=working reason=not-idle"}},
+		},
+		{
+			name: "stalled without active-work evidence still names the refusing predicate",
+			in:   WorkstateInput{State: StateStalled, CleanupStatus: CleanupClean},
+			want: WorkstateDisposition{Verdict: WorkstateVerdictNeedsRecovery, Reason: "not-idle", NeedsRecovery: true, CountsTowardCapacity: true, Blockers: []string{"polecat_state=stalled reason=not-idle"}},
 		},
 		{
 			name: "stalled active work preserves blocker",
@@ -137,5 +152,35 @@ func TestDecideWorkstateCanonicalFields(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDecideWorkstateNeverRefusesWithoutNamingAPredicate locks the invariant that
+// broke in gt-hf8k: check-recovery refused a polecat with "an unknown recovery
+// predicate" — a refusal naming nothing the witness or Mayor could act on — while
+// nuke, reading the same facts, permitted destruction. Every refusal must say why.
+func TestDecideWorkstateNeverRefusesWithoutNamingAPredicate(t *testing.T) {
+	states := []State{StateIdle, StateWorking, StateDone, StateStalled, StateReviewNeeded, StateStuck, StateZombie, State("")}
+	cleanups := []CleanupStatus{CleanupClean, CleanupUnknown, CleanupStash, CleanupUnpushed, CleanupUncommitted, CleanupStatus("")}
+
+	for _, state := range states {
+		for _, cleanup := range cleanups {
+			for _, mqLookupFailed := range []bool{false, true} {
+				for _, hasWork := range []bool{false, true} {
+					in := WorkstateInput{
+						State:              state,
+						CleanupStatus:      cleanup,
+						Branch:             "polecat/rictus",
+						MQCheckRequired:    true,
+						HasSubmittableWork: hasWork,
+						MQLookupFailed:     mqLookupFailed,
+					}
+					d := DecideWorkstate(in)
+					if !d.SafeToNuke && len(d.Blockers) == 0 {
+						t.Fatalf("DecideWorkstate(%+v) refused (verdict=%s reason=%s) without naming a blocker", in, d.Verdict, d.Reason)
+					}
+				}
+			}
+		}
 	}
 }
