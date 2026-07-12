@@ -79,6 +79,60 @@ func TestInspectBackups_EmptyDirWithFreshMtimeIsNotHealthy(t *testing.T) {
 	}
 }
 
+// The negative path the Deacon could not isolate on production (gt-1j3e): the
+// patrol's remote directory exists but holds nothing, while the hash marker says
+// a backup was taken and the directory mtime is fresh. Every liveness signal is
+// green; only the content check can catch it.
+func TestInspectBackups_EmptyStoreWithFreshHashMarkerIsNotHealthy(t *testing.T) {
+	root := town(t, "beads", 4096)
+	if err := os.MkdirAll(filepath.Join(backupPath(root, "beads"), "beads-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(backupPath(root, "beads"), backupHashMarker)
+	if err := os.WriteFile(marker, []byte("s7s97bc5pa2tnluk86p8ae5t9msolmmo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := statusFor(t, root, "beads")
+	if st.Healthy() {
+		t.Fatalf("empty store with a fresh hash marker reported healthy: %+v", st)
+	}
+	if !hasProblem(st, "no dolt store") {
+		t.Errorf("expected empty-store problem, got %v", st.Problems)
+	}
+	if st.HeadHash == "" {
+		t.Error("HeadHash is empty; the marker should still be read and reported")
+	}
+	if st.Age > time.Minute {
+		t.Errorf("marker and directory are fresh, so no staleness should be claimed; Age = %v", st.Age)
+	}
+}
+
+// The parent-dir fallback must not stand in for the patrol's own store. Twelve
+// production databases have both a <db>-backup store and a legacy store in the
+// backup root; when the first is wiped, preferring "whichever holds a manifest"
+// verified the backup against the stale legacy copy and reported GREEN.
+func TestInspectBackups_EmptyStoreIsNotMaskedByLegacyStore(t *testing.T) {
+	root := town(t, "beads", 4096)
+
+	// A legacy store in the backup root, and the patrol's own target sitting empty.
+	writeStore(t, backupPath(root, "beads"), 2, 4096)
+	if err := os.MkdirAll(filepath.Join(backupPath(root, "beads"), "beads-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st := statusFor(t, root, "beads")
+	if st.Healthy() {
+		t.Fatalf("wiped backup masked by the legacy store: %+v", st)
+	}
+	if !hasProblem(st, "no dolt store") {
+		t.Errorf("expected empty-store problem, got %v", st.Problems)
+	}
+	if st.Layout != LayoutCurrent {
+		t.Errorf("Layout = %q, want %q: <db>-backup exists, so that is the store", st.Layout, LayoutCurrent)
+	}
+}
+
 func TestInspectBackups_HealthyBackup(t *testing.T) {
 	root := town(t, "beads", 4096)
 	writeStore(t, filepath.Join(backupPath(root, "beads"), "beads-backup"), 2, 4096)
@@ -95,13 +149,21 @@ func TestInspectBackups_HealthyBackup(t *testing.T) {
 	}
 }
 
-// Older towns synced straight into <db> instead of <db>/<db>-backup.
+// Older towns synced straight into <db> instead of <db>/<db>-backup. The store
+// is real, so it verifies — but the fallback is reported, never silent.
 func TestInspectBackups_LegacyLayout(t *testing.T) {
 	root := town(t, "dolt", 4096)
 	writeStore(t, backupPath(root, "dolt"), 2, 4096)
 
-	if st := statusFor(t, root, "dolt"); !st.Healthy() {
+	st := statusFor(t, root, "dolt")
+	if !st.Healthy() {
 		t.Fatalf("legacy layout reported unhealthy: %v", st.Problems)
+	}
+	if st.Layout != LayoutLegacy {
+		t.Errorf("Layout = %q, want %q", st.Layout, LayoutLegacy)
+	}
+	if len(st.Diagnostics) == 0 {
+		t.Error("legacy fallback must be reported as a diagnostic, not applied silently")
 	}
 }
 

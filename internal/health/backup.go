@@ -30,10 +30,19 @@ const (
 // escape codes (hq-hg40j7). Strip them before the value is compared or shown.
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
+// Backup store layouts. The backup patrol points each database's `file://`
+// remote at <db>/<db>-backup; towns that predate that layout synced straight
+// into <db>.
+const (
+	LayoutCurrent = "current"
+	LayoutLegacy  = "legacy"
+)
+
 // BackupStatus is the result of inspecting one database's filesystem backup.
 type BackupStatus struct {
 	Name          string        `json:"name"`
 	StorePath     string        `json:"store_path,omitempty"`
+	Layout        string        `json:"layout,omitempty"`
 	SizeBytes     int64         `json:"size_bytes"`
 	LiveSizeBytes int64         `json:"live_size_bytes,omitempty"`
 	ChunkFiles    int           `json:"chunk_files"`
@@ -42,6 +51,7 @@ type BackupStatus struct {
 	AgeSeconds    int           `json:"age_seconds"`
 	Age           time.Duration `json:"-"`
 	Problems      []string      `json:"problems,omitempty"`
+	Diagnostics   []string      `json:"diagnostics,omitempty"`
 }
 
 // Healthy reports whether the backup passed every check.
@@ -80,11 +90,21 @@ func inspectBackup(townRoot, dbBackupDir, name string, now time.Time, staleAfter
 	st := BackupStatus{Name: name}
 
 	// The backup patrol points the `file://` remote at <db>/<db>-backup, but
-	// older towns synced straight into <db>. Accept either.
+	// older towns synced straight into <db>. Pick the store by which directory
+	// EXISTS, not by which one happens to hold a manifest: the presence of
+	// <db>-backup means that is where the patrol writes, so an empty one is a
+	// dead backup — and must not be papered over by a leftover legacy store
+	// sitting next to it. Twelve town databases carry both (gt-1j3e), and
+	// preferring "whichever has a manifest" reported a wiped backup as verified.
 	store := filepath.Join(dbBackupDir, name+"-backup")
-	if !hasManifest(store) {
+	st.Layout = LayoutCurrent
+	if !isDir(store) {
 		store = dbBackupDir
+		st.Layout = LayoutLegacy
+		st.Diagnostics = append(st.Diagnostics,
+			fmt.Sprintf("no %s-backup directory — verifying the legacy store in the backup root (%s)", name, dbBackupDir))
 	}
+	st.StorePath = store
 
 	newest := modTime(dbBackupDir) // the patrol's liveness touch
 	if hash, mtime, ok := readHashMarker(filepath.Join(dbBackupDir, backupHashMarker)); ok {
@@ -94,7 +114,6 @@ func inspectBackup(townRoot, dbBackupDir, name string, now time.Time, staleAfter
 
 	st.HasManifest = hasManifest(store)
 	if st.HasManifest {
-		st.StorePath = store
 		st.SizeBytes, st.ChunkFiles, _ = walkStore(store)
 		newest = later(newest, modTime(filepath.Join(store, "manifest")))
 	}
@@ -128,6 +147,12 @@ func inspectBackup(townRoot, dbBackupDir, name string, now time.Time, staleAfter
 	}
 
 	return st
+}
+
+// isDir reports whether path exists and is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // hasManifest reports whether dir looks like a dolt chunk store root.

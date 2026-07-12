@@ -416,6 +416,9 @@ func printHealthReport(r *HealthReport) {
 			for _, problem := range b.Problems {
 				fmt.Printf("    %s %s: %s\n", style.Bold.Render("!"), b.Name, problem)
 			}
+			for _, note := range b.Diagnostics {
+				fmt.Printf("    %s %s: %s\n", style.Dim.Render("~"), b.Name, note)
+			}
 		}
 	}
 	if r.Backups.JSONLFreshness != "" {
