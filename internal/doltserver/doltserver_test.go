@@ -813,6 +813,9 @@ func TestEnsureAllMetadata(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(townRoot, "myrig", "mayor", "rig", ".beads"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	// myrig must be a registered rig — EnsureAllMetadata no longer treats an
+	// unknown database name as a rig directory name (gt-ousq).
+	writeRigsJSON(t, townRoot, "myrig")
 
 	updated, errs := EnsureAllMetadata(townRoot)
 	if len(errs) > 0 {
@@ -820,6 +823,67 @@ func TestEnsureAllMetadata(t *testing.T) {
 	}
 	if len(updated) != 2 {
 		t.Errorf("expected 2 updated, got %d: %v", len(updated), updated)
+	}
+}
+
+// writeRigsJSON registers the given rigs in <townRoot>/mayor/rigs.json.
+func writeRigsJSON(t *testing.T, townRoot string, rigs ...string) {
+	t.Helper()
+	mayorDir := filepath.Join(townRoot, "mayor")
+	if err := os.MkdirAll(mayorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	entries := make([]string, 0, len(rigs))
+	for _, r := range rigs {
+		entries = append(entries, `"`+r+`":{"git_url":""}`)
+	}
+	content := `{"version":1,"rigs":{` + strings.Join(entries, ",") + `}}`
+	if err := os.WriteFile(filepath.Join(mayorDir, "rigs.json"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A database that matches no route and no registered rig must not be turned into
+// a rig: EnsureAllMetadata used to default rigName = dbName, which MkdirAll'd
+// <townRoot>/<dbName>/.beads and wrote a metadata.json into it. That invented
+// directory is indistinguishable from a real rig to every scanner, and beads
+// auto-init later resurrects the database from its stale metadata.json — which is
+// how <townRoot>/gt/.beads and the 'gt' database came to exist (gt-ousq).
+func TestEnsureAllMetadata_DoesNotInventRigDirForUnknownDatabase(t *testing.T) {
+	townRoot := t.TempDir()
+
+	dataDir := filepath.Join(townRoot, ".dolt-data")
+	setupDoltDB(t, dataDir, "hq")
+	setupDoltDB(t, dataDir, "myrig")
+	setupDoltDB(t, dataDir, "testrig") // a throwaway test database — not a rig
+
+	if err := os.MkdirAll(filepath.Join(townRoot, ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(townRoot, "myrig", "mayor", "rig", ".beads"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeRigsJSON(t, townRoot, "myrig")
+
+	updated, errs := EnsureAllMetadata(townRoot)
+	if len(errs) > 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+
+	// The unknown database must not have produced a rig directory.
+	phantom := filepath.Join(townRoot, "testrig")
+	if _, err := os.Stat(phantom); !os.IsNotExist(err) {
+		t.Errorf("EnsureAllMetadata invented a rig directory for an unregistered database: %s exists", phantom)
+	}
+	for _, db := range updated {
+		if db == "testrig" {
+			t.Errorf("unregistered database testrig was processed: updated = %v", updated)
+		}
+	}
+
+	// The registered rig and hq are still handled.
+	if len(updated) != 2 {
+		t.Errorf("expected hq + myrig to be updated, got %d: %v", len(updated), updated)
 	}
 }
 

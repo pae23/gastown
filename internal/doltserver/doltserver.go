@@ -3635,6 +3635,38 @@ func EnsureMetadataForBeadsDir(townRoot, beadsDir, rigName string, doltDatabase 
 	return nil
 }
 
+// rigDirExists reports whether a rig directory for rigName is already present in
+// the town. Used to distinguish a real (if unregistered) rig from a rig
+// directory that would be conjured out of a database name.
+func rigDirExists(townRoot, rigName string) bool {
+	if townRoot == "" || rigName == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(townRoot, rigName))
+	return err == nil && info.IsDir()
+}
+
+// registeredRigNames reads rigs.json and returns the set of rig directory names
+// the town actually knows about. Used to decide whether a database name may be
+// treated as a rig directory name.
+func registeredRigNames(townRoot string) map[string]bool {
+	result := make(map[string]bool)
+	data, err := os.ReadFile(filepath.Join(townRoot, "mayor", "rigs.json"))
+	if err != nil {
+		return result
+	}
+	var parsed struct {
+		Rigs map[string]json.RawMessage `json:"rigs"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return result
+	}
+	for rigName := range parsed.Rigs {
+		result[rigName] = true
+	}
+	return result
+}
+
 // buildRigPrefixMap reads rigs.json and returns a map from Dolt database name
 // (beads prefix without the trailing hyphen) to the rig directory name.
 // Example: {"be": "beads_el", "sw": "sooper_whisper"}.
@@ -3693,11 +3725,32 @@ func EnsureAllMetadata(townRoot string) (updated []string, errs []error) {
 	// "gastown"), multiple databases may exist for the same rig. Processing
 	// them all causes oscillation: each one overwrites the other's
 	// dolt_database correction on every startup. (gas-ar0)
+	registered := registeredRigNames(townRoot)
+
 	rigCandidates := make(map[string][]string) // rig -> candidate db names
 	for _, dbName := range databases {
 		rigName := dbName
 		if mapped, ok := dbToRig[dbName]; ok {
 			rigName = mapped
+		} else if dbName != "hq" && !registered[dbName] && !rigDirExists(townRoot, dbName) {
+			// A database that maps to no route, no registered rig, and has no rig
+			// directory on disk. Falling through would hand its name to
+			// EnsureMetadata as a rig name, and EnsureMetadata MkdirAll's
+			// <townRoot>/<rigName>/.beads and writes a metadata.json into it —
+			// inventing a rig directory out of a database name.
+			//
+			// Those directories are indistinguishable from a real rig to every
+			// scanner that looks for <townRoot>/*/.beads, and beads auto-init will
+			// later resurrect the database from the stale metadata.json long after
+			// the database itself is gone. That is how <townRoot>/gt/.beads came to
+			// exist and how the 'gt' database came back months later (gt-ousq).
+			//
+			// A database name is not evidence that a rig exists. Leave it alone and
+			// let `gt doctor` report it. Databases whose rig directory already
+			// exists still get their metadata repaired (that is a real rig missing
+			// its registry entry, not an invented one).
+			fmt.Fprintf(os.Stderr, "Warning: database %q matches no route, no rig in mayor/rigs.json, and no rig directory; not creating one for it\n", dbName)
+			continue
 		}
 		if dbName == "hq" {
 			rigName = "hq"
