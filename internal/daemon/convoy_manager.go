@@ -95,10 +95,17 @@ type ConvoyManager struct {
 	// Key matches stores map keys ("hq", "gastown", etc.).
 	lastEventIDs sync.Map // map[string]time.Time
 
-	// seeded is true once the first poll cycle has run (warm-up).
-	// The first cycle advances high-water marks without processing events,
-	// preventing a burst of historical event replay on daemon restart.
-	seeded atomic.Bool
+	// seededStores tracks which stores have completed their warm-up poll.
+	// A store's first poll advances its high-water mark without processing
+	// events, preventing a burst of historical event replay.
+	//
+	// This is per-store, not a single global flag: stores appear at different
+	// times (Dolt still opening at boot, a rig unparked mid-run, a rig docked
+	// later). A store that first shows up after the daemon has been running has
+	// no high-water mark, so its query reaches back to the epoch — under a
+	// global flag its entire event history would be processed as if it were new,
+	// replaying long-dead events. See gt-ousq.
+	seededStores sync.Map // map[string]bool
 
 	// processedCloses tracks issue IDs whose current closed state has already
 	// been processed. This prevents duplicate convoy checks when the same close
@@ -246,9 +253,19 @@ func (m *ConvoyManager) runEventPoll() {
 	}
 }
 
+// markStoresSeeded marks every currently-known store as warmed up, so the next
+// poll processes its events instead of treating them as pre-existing history.
+func (m *ConvoyManager) markStoresSeeded() {
+	m.storesMu.Lock()
+	defer m.storesMu.Unlock()
+	for name := range m.stores {
+		m.seededStores.Store(name, true)
+	}
+}
+
 // pollStoresSnapshot polls events from all non-parked stores in the snapshot.
-// The first call is a warm-up: it advances high-water marks without
-// processing events, preventing a burst of historical replay on restart.
+// Each store's first poll is a warm-up: it advances that store's high-water
+// mark without processing events, preventing a burst of historical replay.
 // A per-cycle seen set deduplicates close events across stores so each
 // issueID is processed at most once per poll cycle.
 // Returns true if any store poll encountered an error.
@@ -263,7 +280,6 @@ func (m *ConvoyManager) pollStoresSnapshot(stores map[string]beadsdk.Storage) bo
 			hadError = true
 		}
 	}
-	m.seeded.CompareAndSwap(false, true)
 	return hadError
 }
 
@@ -300,6 +316,7 @@ func (m *ConvoyManager) pollStore(name string, store beadsdk.Storage, stores map
 			// convoy scanner will catch any completions that were lost.
 			now := time.Now().UTC()
 			m.lastEventIDs.Store(name, now)
+			m.seededStores.Store(name, true)
 			m.logger("Convoy: event poll (%s): +Inf/NaN row detected, advancing HWM to %s to skip corrupt data", name, now.Format(time.RFC3339))
 			return nil
 		}
@@ -318,9 +335,10 @@ func (m *ConvoyManager) pollStore(name string, store beadsdk.Storage, stores map
 	}
 	m.lastEventIDs.Store(name, highWater)
 
-	// First poll cycle is warm-up only: advance marks, skip processing.
-	// This prevents replaying the entire event history on daemon restart.
-	if !m.seeded.Load() {
+	// This store's first poll is warm-up only: advance its mark, skip processing.
+	// Whatever is already in its event table predates this daemon, so replaying
+	// it would re-fire long-dead events (gt-ousq).
+	if _, seeded := m.seededStores.Load(name); !seeded {
 		for _, e := range events {
 			if e.ID == "" {
 				continue
@@ -329,6 +347,7 @@ func (m *ConvoyManager) pollStore(name string, store beadsdk.Storage, stores map
 				m.processedLifecycleEvents.Store(e.ID, true)
 			}
 		}
+		m.seededStores.Store(name, true)
 		return nil
 	}
 

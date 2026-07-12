@@ -3,6 +3,7 @@ package beads
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -376,7 +377,12 @@ func ensureDatabaseInitialized(beadsDir string) error {
 		}
 	}
 
-	// No database found — need to initialize.
+	// No database found — need to initialize. Before creating one, verify the
+	// town actually knows about this location (gt-ousq).
+	if err := checkAutoInitAllowed(beadsDir); err != nil {
+		return err
+	}
+
 	prefix := detectPrefix(beadsDir)
 
 	// bd init must run from the parent directory (not inside .beads/).
@@ -435,6 +441,71 @@ func ensureDatabaseInitialized(beadsDir string) error {
 		retryCmd.Env = migrateEnv
 		util.SetDetachedProcessGroup(retryCmd)
 		_, _ = retryCmd.CombinedOutput() // Best effort on retry — CreateAgentBead fallback handles failure
+	}
+
+	return nil
+}
+
+// ErrRigNotRegistered is returned when beads auto-init is asked to create a
+// database for a directory the town does not recognize as a rig.
+var ErrRigNotRegistered = errors.New("rig not registered in the town")
+
+// checkAutoInitAllowed reports whether a brand-new Dolt database may be created
+// for beadsDir. Auto-init exists to repair a rig whose database was never
+// created; it must never conjure a database for a rig that does not exist.
+//
+// Callers reach this path with attacker-ish input: an agent address parsed out
+// of an event or a piece of mail ("testrig/refinery") is turned into a rig path,
+// and nothing upstream checks that the rig was ever docked. Creating the
+// database anyway leaves an unbacked, unregistered DB on the shared Dolt server
+// that nobody is watching (gt-ousq). Fail loud instead.
+//
+// A location is allowed when it is:
+//   - outside any town (standalone rig, tests) — no registry to consult;
+//   - the town's own beads dir (<townRoot>/.beads);
+//   - under the mayor workspace (<townRoot>/mayor/rig/.beads — the hq database);
+//   - under a rig listed in <townRoot>/mayor/rigs.json.
+func checkAutoInitAllowed(beadsDir string) error {
+	parent := filepath.Dir(beadsDir)
+
+	townRoot := FindTownRoot(parent)
+	if townRoot == "" {
+		return nil
+	}
+
+	rel, err := filepath.Rel(townRoot, parent)
+	if err != nil {
+		return nil
+	}
+	rel = filepath.ToSlash(rel)
+
+	// The town's own beads dir is not a rig.
+	if rel == "." {
+		return nil
+	}
+	// Paths outside the town tree have no rig identity to check.
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return nil
+	}
+
+	// The rig owning this beads dir is the first segment below the town root.
+	// This holds for nested locations too (<townRoot>/<rig>/polecats/x/.beads).
+	rigName := strings.Split(rel, "/")[0]
+
+	// The mayor workspace hosts the hq database at mayor/rig/.beads.
+	if rigName == constants.DirMayor {
+		return nil
+	}
+
+	rigsPath := constants.MayorRigsPath(townRoot)
+	rigsConfig, err := config.LoadRigsConfig(rigsPath)
+	if err != nil {
+		return fmt.Errorf("%w: cannot verify rig %q against %s: %v (refusing to auto-create a beads database for %s)",
+			ErrRigNotRegistered, rigName, rigsPath, err, beadsDir)
+	}
+	if _, ok := rigsConfig.Rigs[rigName]; !ok {
+		return fmt.Errorf("%w: %q is absent from %s; refusing to auto-create a beads database for %s — dock the rig with `gt rig add` first",
+			ErrRigNotRegistered, rigName, rigsPath, beadsDir)
 	}
 
 	return nil

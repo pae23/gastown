@@ -821,6 +821,10 @@ func TestEnsureDatabaseInitialized(t *testing.T) {
 		mayorDir := filepath.Join(townDir, "mayor")
 		os.MkdirAll(mayorDir, 0755)
 		os.WriteFile(filepath.Join(mayorDir, "town.json"), []byte("{}"), 0644)
+		// testrig must be a registered rig, otherwise the auto-init guard
+		// refuses to create a database for it (gt-ousq).
+		os.WriteFile(filepath.Join(mayorDir, "rigs.json"),
+			[]byte(`{"version":1,"rigs":{"testrig":{"git_url":"","beads":{"prefix":"gt"}}}}`), 0644)
 		os.MkdirAll(filepath.Join(townDir, ".dolt-data"), 0755) // empty .dolt-data
 
 		rigDir := filepath.Join(townDir, "testrig")
