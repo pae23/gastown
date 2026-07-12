@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/steveyegge/gastown/internal/doltserver"
 )
 
 const (
@@ -44,6 +47,9 @@ var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 const (
 	LayoutCurrent = "current"
 	LayoutLegacy  = "legacy"
+
+	// LayoutMissing marks a live database with no backup directory at all.
+	LayoutMissing = "missing"
 )
 
 // BackupStatus is the result of inspecting one database's filesystem backup.
@@ -69,17 +75,27 @@ type BackupStatus struct {
 // Healthy reports whether the backup passed every check.
 func (b BackupStatus) Healthy() bool { return len(b.Problems) == 0 }
 
-// InspectBackups verifies the CONTENT of every database backup under
-// <townRoot>/.dolt-backup, not just directory mtimes.
+// InspectBackups verifies that every live production database has a backup, and
+// that the backup holds real content — not just a recently-touched directory.
 //
-// The backup patrol touches each database's backup directory on every cycle to
-// signal liveness, so an mtime-only check reports an empty backup as fresh
-// forever (hq-o40bdm: three months of GREEN over empty backups). Each backup is
-// checked for a real dolt store — a manifest plus chunk files, of a size within
-// range of the live database — and for sync activity within staleAfter.
+// The set inspected is the LIVE databases in .dolt-data (the same set the backup
+// patrol enumerates, test databases excluded), unioned with whatever backup
+// directories exist. Enumerating only .dolt-backup made the most dangerous state
+// invisible: a database created since the last backup cycle has no directory
+// there, so it dropped out of the denominator entirely instead of going red
+// (gt-drmn — health reported 39 databases verified while 42 were live). This is
+// the only check that can see the create-to-first-backup window.
 //
-// Returns one BackupStatus per database directory found. A missing or unreadable
-// .dolt-backup directory returns nil: backups may simply not be configured.
+// Each backup is checked for a real dolt store — a manifest plus chunk files, of
+// a size within range of the live database — and for sync activity within
+// staleAfter. The backup patrol touches each directory every cycle to signal
+// liveness, so an mtime-only check reports an empty backup as fresh forever
+// (hq-o40bdm: three months of GREEN over empty backups).
+//
+// Returns one BackupStatus per database. A missing or unreadable .dolt-backup
+// directory returns nil: backups are simply not configured, and every live
+// database going red would be noise, not news. Once the root exists, backups ARE
+// configured, and a live database with nothing under it is a real gap.
 func InspectBackups(townRoot string, staleAfter time.Duration) []BackupStatus {
 	backupDir := filepath.Join(townRoot, ".dolt-backup")
 	entries, err := os.ReadDir(backupDir)
@@ -87,19 +103,58 @@ func InspectBackups(townRoot string, staleAfter time.Duration) []BackupStatus {
 		return nil
 	}
 
-	now := time.Now()
-	var statuses []BackupStatus
+	var names []string
+	seen := make(map[string]bool)
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+
+	// The live databases are the denominator: these are what a backup exists to
+	// protect, whether or not one has been taken yet.
+	live, err := doltserver.ProductionDatabases(townRoot)
+	if err == nil {
+		for _, name := range live {
+			add(name)
+		}
+	}
+	// Plus any backup with no live database behind it — an archived or dropped
+	// database still gets its store verified.
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		statuses = append(statuses, inspectBackup(townRoot, filepath.Join(backupDir, entry.Name()), entry.Name(), now, staleAfter))
+		add(entry.Name())
+	}
+	sort.Strings(names)
+
+	now := time.Now()
+	statuses := make([]BackupStatus, 0, len(names))
+	for _, name := range names {
+		statuses = append(statuses, inspectBackup(townRoot, filepath.Join(backupDir, name), name, now, staleAfter))
+	}
+	if len(statuses) == 0 {
+		return nil
 	}
 	return statuses
 }
 
 func inspectBackup(townRoot, dbBackupDir, name string, now time.Time, staleAfter time.Duration) BackupStatus {
 	st := BackupStatus{Name: name}
+
+	// A live database with no directory at all under .dolt-backup has never been
+	// backed up — the state between a database's creation and the patrol's next
+	// cycle. Report it by name; do not age it (there is no sync to be stale
+	// against, and a zero mtime would claim a fifty-year-old backup).
+	if !isDir(dbBackupDir) {
+		st.Layout = LayoutMissing
+		st.StorePath = dbBackupDir
+		st.LiveSizeBytes, st.LiveCollectedBytes = liveStoreSize(townRoot, name)
+		st.Problems = append(st.Problems, "has no directory under .dolt-backup — the database has never been backed up")
+		return st
+	}
 
 	// The backup patrol points the `file://` remote at <db>/<db>-backup, but
 	// older towns synced straight into <db>. Pick the store by which directory
