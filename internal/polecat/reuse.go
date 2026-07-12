@@ -28,6 +28,7 @@ type SlotReuseInput struct {
 	HasSubmittableWork   bool
 	MQNotRequired        bool
 	AssignedBeadTerminal bool
+	WorkMerged           bool
 	MRSubmitted          bool
 	MQLookupFailed       bool
 }
@@ -61,6 +62,7 @@ func DecideSlotReuse(in SlotReuseInput) SlotReuseDecision {
 		HasSubmittableWork:   in.HasSubmittableWork,
 		MQNotRequired:        in.MQNotRequired,
 		AssignedBeadTerminal: in.AssignedBeadTerminal,
+		WorkMerged:           in.WorkMerged,
 		MRSubmitted:          in.MRSubmitted,
 		MQLookupFailed:       in.MQLookupFailed,
 	})

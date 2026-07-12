@@ -35,8 +35,13 @@ type WorkstateInput struct {
 	HasSubmittableWork             bool
 	MQNotRequired                  bool
 	AssignedBeadTerminal           bool
-	MRSubmitted                    bool
-	MQLookupFailed                 bool
+	// WorkMerged means the branch's patches are already present on its target
+	// branch. It is proof that the work was submitted and merged, and it outranks
+	// MRSubmitted: the MR bead is a wisp the reaper collects once the work lands,
+	// so a merged polecat has no MR bead to find.
+	WorkMerged     bool
+	MRSubmitted    bool
+	MQLookupFailed bool
 }
 
 // WorkstateDisposition is the canonical polecat lifecycle decision. It is pure
@@ -159,7 +164,12 @@ func DecideWorkstate(in WorkstateInput) WorkstateDisposition {
 	}
 
 	if in.MQCheckRequired {
-		if in.MQLookupFailed {
+		if in.WorkMerged {
+			// Merged work is proof of submission. It cannot need MQ submission, and
+			// it cannot be blocked by a failed MQ lookup: the MR wisp it would look
+			// for is gone precisely because the work landed.
+			d.MQStatus = "merged"
+		} else if in.MQLookupFailed {
 			d.Verdict = WorkstateVerdictNeedsRecovery
 			d.Reason = "mq-lookup-failed"
 			d.NeedsRecovery = true
