@@ -54,6 +54,14 @@ log() {
   echo "[dolt-backup] $*"
 }
 
+# `dolt log --oneline` colorizes the hash even when its output is a pipe, so the
+# raw value reads as $'\033[33m<hash>'. Writing that into .last-backup-hash makes
+# the marker unreadable to anything comparing it against a real commit hash
+# (hq-hg40j7). Strip escapes from every hash we read or write.
+strip_ansi() {
+  sed $'s/\033\\[[0-9;]*[a-zA-Z]//g'
+}
+
 # --- Step 1: Discover databases -----------------------------------------------
 
 # Use explicit list if provided, otherwise auto-discover by scanning
@@ -102,16 +110,28 @@ for DB in "${PROD_DBS[@]}"; do
   fi
 
   # Get current HEAD hash
-  CURRENT_HASH=$(cd "$DB_DIR" && dolt log -n 1 --oneline 2>/dev/null | head -1 | cut -d' ' -f1 || true)
+  CURRENT_HASH=$(cd "$DB_DIR" && dolt log -n 1 --oneline 2>/dev/null | head -1 | cut -d' ' -f1 | strip_ansi || true)
   if [[ -z "$CURRENT_HASH" ]]; then
     log "  $DB: could not get HEAD hash, will sync anyway"
     CURRENT_HASH="unknown"
   fi
 
-  # Check last backed-up hash
+  # Check last backed-up hash. Markers written before the strip_ansi fix carry
+  # escape codes; strip on read so they compare equal instead of forcing a resync.
   LAST_HASH=""
   if [[ -f "$HASH_FILE" ]]; then
-    LAST_HASH=$(cat "$HASH_FILE")
+    LAST_HASH=$(strip_ansi < "$HASH_FILE")
+  fi
+
+  # A hash marker only proves a backup happened if the backup is actually there.
+  # Markers written for syncs that never ran (the SYNC_RC bug below) would
+  # otherwise pin an empty backup dir as "unchanged" forever. Force a resync when
+  # no dolt store is present, in either the current or the legacy layout.
+  if [[ ! -s "$BACKUP_DIR/$DB/$BACKUP_NAME/manifest" && ! -s "$BACKUP_DIR/$DB/manifest" ]]; then
+    if [[ -n "$LAST_HASH" ]]; then
+      log "  $DB: hash marker present but backup has no dolt store — forcing resync"
+    fi
+    LAST_HASH=""
   fi
 
   if [[ "$CURRENT_HASH" = "$LAST_HASH" ]] && [[ "$CURRENT_HASH" != "unknown" ]]; then

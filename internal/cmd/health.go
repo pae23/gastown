@@ -23,6 +23,11 @@ var (
 	healthJSON bool
 )
 
+// doltBackupStaleAfter is how long a database backup can go without a sync
+// before gt health flags it. Tighter than the daemon's threshold: the CLI is
+// read on demand, so a warning here costs nothing.
+const doltBackupStaleAfter = 30 * time.Minute
+
 // HealthReport is the machine-readable output of gt health --json.
 type HealthReport struct {
 	Timestamp string              `json:"timestamp"`
@@ -64,12 +69,14 @@ type PollutionRecord struct {
 }
 
 type BackupHealth struct {
-	DoltFreshness  string `json:"dolt_freshness,omitempty"`
-	DoltAgeSeconds int    `json:"dolt_age_seconds,omitempty"`
-	DoltStale      bool   `json:"dolt_stale"`
-	JSONLFreshness string `json:"jsonl_freshness,omitempty"`
-	JSONLAgeSeconds int   `json:"jsonl_age_seconds,omitempty"`
-	JSONLStale     bool   `json:"jsonl_stale"`
+	DoltFreshness   string                `json:"dolt_freshness,omitempty"`
+	DoltAgeSeconds  int                   `json:"dolt_age_seconds,omitempty"`
+	DoltStale       bool                  `json:"dolt_stale"`
+	DoltCorrupt     bool                  `json:"dolt_corrupt"`
+	DoltBackups     []health.BackupStatus `json:"dolt_backups,omitempty"`
+	JSONLFreshness  string                `json:"jsonl_freshness,omitempty"`
+	JSONLAgeSeconds int                   `json:"jsonl_age_seconds,omitempty"`
+	JSONLStale      bool                  `json:"jsonl_stale"`
 }
 
 type ProcessHealth struct {
@@ -281,15 +288,22 @@ func checkPollution(port int) []PollutionRecord {
 func checkBackupHealth(townRoot string) *BackupHealth {
 	bh := &BackupHealth{}
 
-	// Dolt filesystem backup freshness.
-	backupDir := filepath.Join(townRoot, ".dolt-backup")
-	if _, err := os.Stat(backupDir); err == nil {
-		newest := findNewestFile(backupDir)
-		if !newest.IsZero() {
-			age := time.Since(newest)
-			bh.DoltAgeSeconds = int(age.Seconds())
-			bh.DoltFreshness = age.Round(time.Second).String()
-			bh.DoltStale = age > 30*time.Minute
+	// Dolt filesystem backup: verify each database's backup holds real dolt data,
+	// not just a recently-touched directory. The backup patrol bumps directory
+	// mtimes every cycle, so the old newest-file-in-the-tree check reported empty
+	// backups as fresh — and one healthy database masked every broken one
+	// (hq-o40bdm).
+	bh.DoltBackups = health.InspectBackups(townRoot, doltBackupStaleAfter)
+	for _, st := range bh.DoltBackups {
+		if st.Age > time.Duration(bh.DoltAgeSeconds)*time.Second {
+			bh.DoltAgeSeconds = st.AgeSeconds
+			bh.DoltFreshness = st.Age.Round(time.Second).String()
+		}
+		if st.Age > doltBackupStaleAfter {
+			bh.DoltStale = true
+		}
+		if !st.Healthy() {
+			bh.DoltCorrupt = true
 		}
 	}
 
@@ -383,14 +397,26 @@ func printHealthReport(r *HealthReport) {
 
 	// 4. Backups
 	fmt.Printf("\n%s Backups\n", style.Bold.Render("●"))
-	if r.Backups.DoltFreshness != "" {
+	if len(r.Backups.DoltBackups) == 0 {
+		fmt.Printf("  %s Dolt filesystem: not found\n", style.Dim.Render("○"))
+	} else {
+		healthy := 0
+		for _, b := range r.Backups.DoltBackups {
+			if b.Healthy() {
+				healthy++
+			}
+		}
 		icon := style.Bold.Render("✓")
-		if r.Backups.DoltStale {
+		if healthy < len(r.Backups.DoltBackups) {
 			icon = style.Bold.Render("!")
 		}
-		fmt.Printf("  %s Dolt filesystem: %s ago\n", icon, r.Backups.DoltFreshness)
-	} else {
-		fmt.Printf("  %s Dolt filesystem: not found\n", style.Dim.Render("○"))
+		fmt.Printf("  %s Dolt filesystem: %d/%d database(s) verified, oldest %s ago\n",
+			icon, healthy, len(r.Backups.DoltBackups), r.Backups.DoltFreshness)
+		for _, b := range r.Backups.DoltBackups {
+			for _, problem := range b.Problems {
+				fmt.Printf("    %s %s: %s\n", style.Bold.Render("!"), b.Name, problem)
+			}
+		}
 	}
 	if r.Backups.JSONLFreshness != "" {
 		icon := style.Bold.Render("✓")

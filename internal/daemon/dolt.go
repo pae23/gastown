@@ -16,6 +16,7 @@ import (
 
 	agentconfig "github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/doltserver"
+	"github.com/steveyegge/gastown/internal/health"
 )
 
 const doltCmdTimeout = 15 * time.Second
@@ -1229,35 +1230,19 @@ func (m *DoltServerManager) countDataDirDatabases() int {
 	return count
 }
 
-// checkBackupFreshness checks if Dolt backups are fresh. Returns warnings for any configured
-// backup database that hasn't been synced in over 2 hours. Non-fatal: failures return nil.
+// checkBackupFreshness verifies Dolt backups are both fresh and real. Returns a warning
+// for every backup that is stale or that holds no usable dolt data. Non-fatal: failures
+// return nil.
+//
+// Freshness alone is not enough: the backup patrol touches each backup directory on every
+// cycle to signal liveness, so an mtime-only check reported empty backups as healthy for
+// three months (hq-o40bdm). health.InspectBackups verifies content — manifest, chunk files,
+// size against the live database — as well as age.
 func (m *DoltServerManager) checkBackupFreshness() []string {
-	backupDir := filepath.Join(m.townRoot, ".dolt-backup")
-	info, err := os.Stat(backupDir)
-	if err != nil || !info.IsDir() {
-		return nil // No backup directory — backup patrol may not be configured
-	}
-
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		return nil
-	}
-
-	const staleThreshold = 2 * time.Hour
-	now := time.Now()
 	var warnings []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dbInfo, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		age := now.Sub(dbInfo.ModTime())
-		if age > staleThreshold {
-			warnings = append(warnings, fmt.Sprintf("Dolt backup %q is %.0f minutes old (threshold %.0fm) — backup patrol may be stalled",
-				entry.Name(), age.Minutes(), staleThreshold.Minutes()))
+	for _, st := range health.InspectBackups(m.townRoot, health.BackupStaleAfter) {
+		for _, problem := range st.Problems {
+			warnings = append(warnings, fmt.Sprintf("Dolt backup %q %s", st.Name, problem))
 		}
 	}
 	return warnings
