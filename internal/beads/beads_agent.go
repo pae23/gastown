@@ -704,17 +704,41 @@ func (b *Beads) GetAgentBead(id string) (*Issue, *AgentFields, error) {
 // ListAgentBeads returns all agent beads in a single query.
 // Returns a map of agent bead ID to Issue.
 //
+// Agent beads live in the town database (see ForAgentBead), so this routes to
+// the agent-bead target the same way GetAgentBead does. Without that routing a
+// wrapper rooted at a rig (beads.New(rig.Path)) queries the rig database, which
+// holds no agent beads — every polecat then looks like it has no identity bead
+// even though spawn created one (gt-af7j).
+//
+// Callers that deliberately walk town and rig databases separately — doctor's
+// cross-database reconciliation, gt status — must use ListAgentBeadsLocal.
+//
 // Queries both the issues table (authoritative metadata source) and the
 // wisps table (fallback existence source). Issues take precedence for duplicate
 // IDs so labels/type are preserved for doctor validation.
 func (b *Beads) ListAgentBeads() (map[string]*Issue, error) {
+	return b.agentBeadTarget().ListAgentBeadsLocal()
+}
+
+// ListAgentBeadsLocal is ListAgentBeads without routing: it queries whichever
+// database this wrapper is rooted at. Use it only when the database is the
+// point — reconciling town against rig copies, or reporting per-database state.
+func (b *Beads) ListAgentBeadsLocal() (map[string]*Issue, error) {
 	// Query issues table first. Issues include labels and type metadata used by
 	// doctor checks (for example, validating gt:agent labels).
-	// Agent beads are type=agent (infrastructure), hidden by bd list default filter.
-	// Use --include-infra so they appear in results.
+	// Legacy agent beads are type=agent (infrastructure), hidden by bd list's
+	// default filter, so --include-infra is needed to see them.
 	out, err := b.run("list", "--label=gt:agent", "--include-infra", "--json", "--flat", "--no-pager")
 	if err != nil {
-		return nil, err
+		// --include-infra takes a counting path in bd that fails outright when any
+		// ID exists in both the issues and wisps tables, and one such duplicate
+		// anywhere in the database blinds every agent-bead listing (gt-af7j).
+		// Retry without it: modern agent beads are type=task and visible either
+		// way, and the wisps query below still surfaces legacy type=agent beads.
+		out, err = b.run("list", "--label=gt:agent", "--json", "--flat", "--no-pager")
+		if err != nil {
+			return nil, err
+		}
 	}
 	issuesByID := make(map[string]*Issue)
 	var issues []*Issue

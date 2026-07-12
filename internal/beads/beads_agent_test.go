@@ -646,3 +646,158 @@ esac
 		t.Fatalf("CreateOrReopenAgentBead did not use town BEADS_DIR for existing bead path; log:\n%s", logOutput)
 	}
 }
+
+// installMockBDListRecorder installs a bd stub that records the BEADS_DIR each
+// list call resolves to, and serves one agent bead. When MOCK_BD_INFRA_FAILS is
+// set, list --include-infra fails the way a database with an ID in both the
+// issues and wisps tables does.
+func installMockBDListRecorder(t *testing.T, logPath string) {
+	t.Helper()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("mock bd list recorder is Unix-oriented")
+	}
+	binDir := t.TempDir()
+
+	script := `#!/bin/sh
+printf 'beads_dir=%s args=%s\n' "$BEADS_DIR" "$*" >> "$MOCK_BD_LOG"
+
+cmd=""
+for arg in "$@"; do
+  case "$arg" in
+    --*) ;;
+    *) cmd="$arg"; break ;;
+  esac
+done
+
+case "$cmd" in
+  list)
+    for arg in "$@"; do
+      if [ "$arg" = "--include-infra" ] && [ -n "$MOCK_BD_INFRA_FAILS" ]; then
+        printf 'Error: search issues with counts: id "hq-dog-charlie" exists in both issues and wisps\n' >&2
+        exit 1
+      fi
+    done
+    printf '[{"id":"pt-imported-polecat-shiny","title":"shiny","status":"open","labels":["gt:agent"]}]\n'
+    exit 0
+    ;;
+  mol)
+    printf '{"wisps":[]}\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	scriptPath := filepath.Join(binDir, "bd")
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write mock bd: %v", err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MOCK_BD_LOG", logPath)
+}
+
+// newAgentBeadRoutingTown builds a town with one rig and returns the town root.
+func newAgentBeadRoutingTown(t *testing.T) string {
+	t.Helper()
+
+	townRoot, _ := filepath.EvalSymlinks(t.TempDir())
+	for _, dir := range []string{
+		filepath.Join(townRoot, "mayor"),
+		filepath.Join(townRoot, ".beads"),
+		filepath.Join(townRoot, "imported", "mayor", "rig", ".beads"),
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(townRoot, "mayor", "town.json"), []byte(`{"name":"test"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(townRoot, ".beads", "routes.jsonl"), []byte("{\"prefix\":\"pt-\",\"path\":\"imported/mayor/rig\"}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return townRoot
+}
+
+// Agent beads are written to the town database (ForAgentBead), so listing them
+// from a rig-rooted wrapper must query the town database too. Reading the rig
+// database instead made every polecat spawned by the current code look like it
+// had no identity bead (gt-af7j).
+func TestListAgentBeads_RoutesToTownDatabase(t *testing.T) {
+	townRoot := newAgentBeadRoutingTown(t)
+	logPath := filepath.Join(townRoot, "bd.log")
+	installMockBDListRecorder(t, logPath)
+
+	rigDir := filepath.Join(townRoot, "imported", "mayor", "rig")
+	bd := NewWithBeadsDir(rigDir, filepath.Join(rigDir, ".beads"))
+
+	agents, err := bd.ListAgentBeads()
+	if err != nil {
+		t.Fatalf("ListAgentBeads: %v", err)
+	}
+	if _, ok := agents["pt-imported-polecat-shiny"]; !ok {
+		t.Fatalf("ListAgentBeads did not return the agent bead, got %v", agents)
+	}
+
+	logOutput := readMockBDLog(t, logPath)
+	townBeadsDir := filepath.Join(townRoot, ".beads")
+	if !strings.Contains(logOutput, "beads_dir="+townBeadsDir+" args=list") {
+		t.Fatalf("ListAgentBeads did not query the town database; log:\n%s", logOutput)
+	}
+	if strings.Contains(logOutput, "beads_dir="+filepath.Join(rigDir, ".beads")+" args=list") {
+		t.Fatalf("ListAgentBeads queried the rig database; log:\n%s", logOutput)
+	}
+}
+
+// ListAgentBeadsLocal is the escape hatch doctor and gt status rely on to
+// reconcile town copies against legacy rig copies: it must not route.
+func TestListAgentBeadsLocal_StaysOnCurrentDatabase(t *testing.T) {
+	townRoot := newAgentBeadRoutingTown(t)
+	logPath := filepath.Join(townRoot, "bd.log")
+	installMockBDListRecorder(t, logPath)
+
+	rigDir := filepath.Join(townRoot, "imported", "mayor", "rig")
+	rigBeadsDir := filepath.Join(rigDir, ".beads")
+	bd := NewWithBeadsDir(rigDir, rigBeadsDir)
+
+	if _, err := bd.ListAgentBeadsLocal(); err != nil {
+		t.Fatalf("ListAgentBeadsLocal: %v", err)
+	}
+
+	logOutput := readMockBDLog(t, logPath)
+	if !strings.Contains(logOutput, "beads_dir="+rigBeadsDir+" args=list") {
+		t.Fatalf("ListAgentBeadsLocal did not query the rig database; log:\n%s", logOutput)
+	}
+	if strings.Contains(logOutput, "beads_dir="+filepath.Join(townRoot, ".beads")+" args=list") {
+		t.Fatalf("ListAgentBeadsLocal routed to the town database; log:\n%s", logOutput)
+	}
+}
+
+// A single ID present in both the issues and wisps tables makes bd's
+// --include-infra counting path fail, which blinded every agent-bead listing on
+// that database. The listing must degrade to the plain query instead (gt-af7j).
+func TestListAgentBeads_RetriesWithoutIncludeInfraOnFailure(t *testing.T) {
+	townRoot := newAgentBeadRoutingTown(t)
+	logPath := filepath.Join(townRoot, "bd.log")
+	installMockBDListRecorder(t, logPath)
+	t.Setenv("MOCK_BD_INFRA_FAILS", "1")
+
+	rigDir := filepath.Join(townRoot, "imported", "mayor", "rig")
+	bd := NewWithBeadsDir(rigDir, filepath.Join(rigDir, ".beads"))
+
+	agents, err := bd.ListAgentBeads()
+	if err != nil {
+		t.Fatalf("ListAgentBeads should survive an --include-infra failure, got: %v", err)
+	}
+	if _, ok := agents["pt-imported-polecat-shiny"]; !ok {
+		t.Fatalf("ListAgentBeads returned no beads after retry, got %v", agents)
+	}
+
+	logOutput := readMockBDLog(t, logPath)
+	if !strings.Contains(logOutput, "--include-infra") {
+		t.Fatalf("ListAgentBeads never attempted --include-infra; log:\n%s", logOutput)
+	}
+}
