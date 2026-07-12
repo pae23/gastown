@@ -334,6 +334,65 @@ func TestInspectBackups_NoBackupDirReturnsNil(t *testing.T) {
 	}
 }
 
+// The denominator bug (gt-drmn): a database created since the last backup cycle
+// has no directory under .dolt-backup, and enumerating the backup root dropped it
+// from the report rather than failing it. Health said 39/39 verified while 42
+// databases were live. This is the only check that sees the window between a
+// database's creation and its first backup.
+func TestInspectBackups_LiveDatabaseWithNoBackupDirIsRed(t *testing.T) {
+	root := town(t, "beads", 4096)
+	writeStore(t, filepath.Join(backupPath(root, "beads"), "beads-backup"), 2, 4096)
+
+	// A second database goes live. The patrol has not run since.
+	writeStore(t, filepath.Join(root, ".dolt-data", "newrig", ".dolt", "noms"), 1, 4096)
+
+	all := InspectBackups(root, BackupStaleAfter)
+	if len(all) != 2 {
+		t.Fatalf("denominator = %d, want 2: an unbacked live database must be counted, not skipped (%+v)", len(all), all)
+	}
+
+	st := statusFor(t, root, "newrig")
+	if st.Healthy() {
+		t.Fatalf("live database with no backup reported healthy: %+v", st)
+	}
+	if !hasProblem(st, "never been backed up") {
+		t.Errorf("expected a never-backed-up problem naming the database, got %v", st.Problems)
+	}
+	if st.Layout != LayoutMissing {
+		t.Errorf("Layout = %q, want %q", st.Layout, LayoutMissing)
+	}
+	// No sync ever happened, so there is no age to report — a zero mtime would
+	// otherwise claim a decades-old backup and poison the report's oldest-age line.
+	if st.Age != 0 {
+		t.Errorf("Age = %v, want 0 for a backup that never existed", st.Age)
+	}
+
+	// The backed-up database is still verified: one failure must not mask the rest.
+	if beads := statusFor(t, root, "beads"); !beads.Healthy() {
+		t.Errorf("healthy backup reported unhealthy: %v", beads.Problems)
+	}
+}
+
+// Test databases are not production data — the backup patrol skips them
+// (plugins/dolt-backup/run.sh) and so must the denominator, or every throwaway
+// database left behind by a test run shows up as an unbacked database.
+func TestInspectBackups_TestDatabasesAreNotCounted(t *testing.T) {
+	root := town(t, "beads", 4096)
+	writeStore(t, filepath.Join(backupPath(root, "beads"), "beads-backup"), 2, 4096)
+
+	for _, db := range []string{"testdb_abc", "beads_t1", "beads_pt2", "doctest_x"} {
+		writeStore(t, filepath.Join(root, ".dolt-data", db, ".dolt", "noms"), 1, 4096)
+	}
+
+	all := InspectBackups(root, BackupStaleAfter)
+	if len(all) != 1 {
+		t.Fatalf("denominator = %d, want 1: test databases must be excluded (%+v)", len(all), all)
+	}
+	if all[0].Name != "beads" {
+		t.Errorf("inspected %q, want %q", all[0].Name, "beads")
+	}
+}
+
 func TestIsChunkFile(t *testing.T) {
 	cases := map[string]bool{
 		"ilj73lbsqpd8lkdj55o11mqg0ad6c641.darc": true,

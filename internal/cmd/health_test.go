@@ -50,6 +50,40 @@ func TestCheckBackupHealth_EmptyStoreIsReportedCorrupt(t *testing.T) {
 	}
 }
 
+// The command must go red for a live database that has no backup at all, and
+// must count it (gt-drmn). Before this, the denominator was "directories under
+// .dolt-backup", so a database created between backup cycles was not red — it was
+// absent, and `gt health` printed a fully-verified N/N over an unbacked database.
+func TestCheckBackupHealth_LiveDatabaseWithNoBackupIsReportedCorrupt(t *testing.T) {
+	root := t.TempDir()
+	writeBackupStore(t, filepath.Join(root, ".dolt-data", "beads", ".dolt", "noms"), 4096)
+	writeBackupStore(t, filepath.Join(root, ".dolt-backup", "beads", "beads-backup"), 4096)
+
+	// A database goes live; the backup patrol has not run since.
+	writeBackupStore(t, filepath.Join(root, ".dolt-data", "newrig", ".dolt", "noms"), 4096)
+
+	bh := checkBackupHealth(root)
+	if !bh.DoltCorrupt {
+		t.Fatalf("unbacked live database not reported corrupt: %+v", bh.DoltBackups)
+	}
+	if len(bh.DoltBackups) != 2 {
+		t.Fatalf("counted %d database(s), want 2: the unbacked database must be in the denominator (%+v)",
+			len(bh.DoltBackups), bh.DoltBackups)
+	}
+	var found bool
+	for _, st := range bh.DoltBackups {
+		if st.Name == "newrig" {
+			found = true
+			if st.Healthy() {
+				t.Errorf("unbacked database reported healthy: %+v", st)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("unbacked database missing from the report: %+v", bh.DoltBackups)
+	}
+}
+
 func TestCheckBackupHealth_VerifiedStoreIsClean(t *testing.T) {
 	root := t.TempDir()
 	writeBackupStore(t, filepath.Join(root, ".dolt-data", "beads", ".dolt", "noms"), 4096)

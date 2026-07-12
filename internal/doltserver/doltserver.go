@@ -2207,6 +2207,42 @@ func ListDatabases(townRoot string) ([]string, error) {
 	return listDatabasesLocal(config)
 }
 
+// testDatabasePrefixes name the throwaway databases that tests and doctor runs
+// leave behind in .dolt-data. They are not production data: the backup patrol
+// skips them (plugins/dolt-backup/run.sh) and `gt dolt cleanup` sweeps them.
+// Any check that reasons about "the databases we are supposed to be protecting"
+// must apply the same exclusions, or it counts test pollution as production.
+var testDatabasePrefixes = []string{"testdb_", "beads_t", "beads_pt", "doctest_"}
+
+// IsTestDatabase reports whether a database name belongs to test pollution
+// rather than production data.
+func IsTestDatabase(name string) bool {
+	for _, prefix := range testDatabasePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ProductionDatabases returns the live databases under .dolt-data that hold real
+// town data — every valid dolt database minus test pollution. This is the set the
+// backup patrol enumerates, and therefore the set any backup check must measure
+// itself against.
+func ProductionDatabases(townRoot string) ([]string, error) {
+	databases, err := ListDatabases(townRoot)
+	if err != nil {
+		return nil, err
+	}
+	var production []string
+	for _, name := range databases {
+		if !IsTestDatabase(name) {
+			production = append(production, name)
+		}
+	}
+	return production, nil
+}
+
 // listDatabasesLocal scans the filesystem for valid Dolt database directories.
 func listDatabasesLocal(config *Config) ([]string, error) {
 	entries, err := os.ReadDir(config.DataDir)
