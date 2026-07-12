@@ -107,12 +107,11 @@ func TestBuildPolecatInventoryItem(t *testing.T) {
 			wantVerdict: polecat.WorkstateVerdictPendingMR,
 		},
 		{
-			name:         "done without active mr is not reusable",
+			name:         "done without active mr is safe to nuke but not reusable",
 			polecatName:  "done",
 			fields:       &beads.AgentFields{AgentState: string(beads.AgentStateDone), CleanupStatus: string(polecat.CleanupClean)},
 			wantState:    polecat.StateDone,
-			wantVerdict:  polecat.WorkstateVerdictNeedsRecovery,
-			wantRecovery: true,
+			wantVerdict:  polecat.WorkstateVerdictSafeToNuke,
 			wantCapacity: true,
 		},
 		{

@@ -88,6 +88,7 @@ type SafetyCheckResult struct {
 	Polecat       string
 	Blocked       bool
 	Reasons       []string
+	Verdict       string
 	CleanupStatus polecat.CleanupStatus
 	HookBead      string
 	HookStale     bool // true if hooked bead is closed
@@ -97,126 +98,48 @@ type SafetyCheckResult struct {
 }
 
 // checkPolecatSafety performs safety checks before destructive operations.
-// Returns nil if the polecat is safe to operate on, or a SafetyCheckResult with reasons if blocked.
+// It delegates to assessPolecatRecovery — the same decision `gt polecat
+// check-recovery` reports — so the destructive command can never permit what the
+// advisory command refuses. A polecat that cannot be assessed is blocked: for a
+// command that deletes worktrees, branches, and agent state, silence is not consent.
 func checkPolecatSafety(target polecatTarget) *SafetyCheckResult {
 	result := &SafetyCheckResult{
 		Polecat: fmt.Sprintf("%s/%s", target.rigName, target.polecatName),
 	}
 
-	// Get polecat info for branch name
-	polecatInfo, infoErr := target.mgr.Get(target.polecatName)
-
-	// Check 1: Unpushed commits via cleanup_status or git state
-	bd := beads.New(target.r.Path)
-	agentBeadID := polecatBeadIDForRig(target.r, target.rigName, target.polecatName)
-	agentIssue, fields, err := bd.GetAgentBead(agentBeadID)
-
-	if err != nil || fields == nil {
-		// No agent bead - fall back to git check
-		if infoErr == nil && polecatInfo != nil {
-			gitState, gitErr := getGitState(polecatInfo.ClonePath)
-			result.GitState = gitState
-			if gitErr != nil {
-				result.Reasons = append(result.Reasons, "cannot check git state")
-			} else if !gitState.Clean {
-				if gitState.UnpushedCommits > 0 {
-					result.Reasons = append(result.Reasons, fmt.Sprintf("has %d unpushed commit(s)", gitState.UnpushedCommits))
-				} else if len(gitState.UncommittedFiles) > 0 {
-					result.Reasons = append(result.Reasons, fmt.Sprintf("has %d uncommitted file(s)", len(gitState.UncommittedFiles)))
-				} else if gitState.StashCount > 0 {
-					result.Reasons = append(result.Reasons, fmt.Sprintf("has %d stash(es)", gitState.StashCount))
-				}
-			}
-		}
-	} else {
-		currentIssue := ""
-		if infoErr == nil && polecatInfo != nil {
-			currentIssue = polecatInfo.Issue
-		}
-		sourceHint := agentSourceIssueHint(currentIssue, fields)
-		hookBead := agentHookBead(agentIssue, fields)
-		var gitState *GitState
-		gitStateLoaded := false
-		loadGitState := func() {
-			if gitStateLoaded || infoErr != nil || polecatInfo == nil {
-				return
-			}
-			gitState, _ = getGitState(polecatInfo.ClonePath)
-			result.GitState = gitState
-			gitStateLoaded = true
-		}
-		activeMRAssessment := polecat.ActiveMRAssessment{}
-		if fields.ActiveMR != "" {
-			loadGitState()
-			gitSafe := false
-			if polecatInfo != nil {
-				gitSafe = activeMRGitSafeForWorktree(polecatInfo.ClonePath)
-			}
-			activeMRAssessment = polecat.AssessActiveMR(bd, polecat.ActiveMRInput{ActiveMR: fields.ActiveMR, SourceIssueHint: sourceHint, RequireGitSafe: true, GitSafe: gitSafe})
-		}
-		beadTerminal := isAssignedBeadTerminal(bd, sourceHint)
-		if activeMRAssessment.SourceTerminal {
-			beadTerminal = true
-		}
-
-		// Check cleanup_status from agent bead
-		result.CleanupStatus = polecat.CleanupStatus(fields.CleanupStatus)
-		switch result.CleanupStatus {
-		case polecat.CleanupClean:
-			// OK
-		default:
-			if result.CleanupStatus == polecat.CleanupUnpushed {
-				loadGitState()
-			}
-			gitSafe := false
-			if polecatInfo != nil {
-				gitSafe = activeMRGitSafeForWorktree(polecatInfo.ClonePath)
-			}
-			hookSafe, hookTerminal, _ := hookBeadSafeForCleanup(bd, hookBead)
-			activeMRSafe := !activeMRAssessment.Pending
-			if polecat.CanIgnoreStaleCleanupStatus(result.CleanupStatus, beadTerminal || hookTerminal, hookSafe, activeMRSafe, gitSafe) {
-				// OK: stale self-report after terminal source and direct clean git.
-			} else {
-				result.Reasons = append(result.Reasons, cleanupStatusBlocker(result.CleanupStatus))
-			}
-		}
-
-		// Check 3: Work on hook
-		if hookBead != "" {
-			result.HookBead = hookBead
-			// Check if hooked bead is still active (not closed)
-			hookedIssue, err := bd.Show(hookBead)
-			if err == nil && hookedIssue != nil {
-				if hookedIssue.Status != "closed" {
-					result.Reasons = append(result.Reasons, fmt.Sprintf("has work on hook (%s)", hookBead))
-				} else {
-					result.HookStale = true
-				}
-			} else {
-				result.Reasons = append(result.Reasons, fmt.Sprintf("has work on hook (%s, unverified)", hookBead))
-			}
-		}
-
-		if fields.ActiveMR != "" {
-			result.ActiveMR = fields.ActiveMR
-			if blocker := activeMRAssessment.Reason; activeMRAssessment.Pending && blocker != "" {
-				result.Reasons = append(result.Reasons, blocker)
-			}
-		}
+	assessment, err := assessPolecatRecovery(target.rigName, target.polecatName, target.mgr, target.r)
+	if err != nil {
+		result.Blocked = true
+		result.Reasons = []string{fmt.Sprintf("recovery_check_failed: %v", err)}
+		return result
 	}
 
-	// Check 2: Open MR beads for this branch
-	if infoErr == nil && polecatInfo != nil && polecatInfo.Branch != "" {
-		mr, mrErr := bd.FindMRForBranch(polecatInfo.Branch)
-		if mrErr != nil {
-			result.Reasons = append(result.Reasons, fmt.Sprintf("open_mr_lookup_error: %v", mrErr))
-		} else if mr != nil {
-			result.OpenMR = mr.ID
-			result.Reasons = append(result.Reasons, fmt.Sprintf("has open MR (%s)", mr.ID))
-		}
+	return safetyCheckFromRecovery(result.Polecat, assessment.Status)
+}
+
+// safetyCheckFromRecovery translates a recovery verdict into a nuke safety
+// verdict. The translation is total: anything check-recovery does not call
+// SAFE_TO_NUKE blocks the nuke, carrying that verdict's own predicates as the
+// reasons. Nuke has no checklist of its own to fall open on.
+func safetyCheckFromRecovery(polecatAddr string, status RecoveryStatus) *SafetyCheckResult {
+	result := &SafetyCheckResult{
+		Polecat:       polecatAddr,
+		Verdict:       status.Verdict,
+		CleanupStatus: status.CleanupStatus,
+		HookBead:      status.HookBead,
+		HookStale:     status.HookStale,
+		ActiveMR:      status.ActiveMR,
+		OpenMR:        status.OpenMR,
+		GitState:      status.GitState,
+		Blocked:       !status.SafeToNuke,
 	}
 
-	result.Blocked = len(result.Reasons) > 0
+	if result.Blocked {
+		result.Reasons = status.Blockers
+		if len(result.Reasons) == 0 {
+			result.Reasons = []string{fmt.Sprintf("verdict=%s reason=%s", status.Verdict, status.Reason)}
+		}
+	}
 	return result
 }
 
@@ -262,83 +185,52 @@ func formatSafetyCheckBlockers(blocked []*SafetyCheckResult) string {
 	return strings.Join(parts, " | ")
 }
 
-// displayDryRunSafetyCheck shows safety check status for dry-run mode. It returns true when a normal nuke would refuse.
+// displayDryRunSafetyCheck shows safety check status for dry-run mode. It prints
+// the verdict a real nuke would act on — the same one check-recovery reports —
+// and returns true when a normal nuke would refuse.
 func displayDryRunSafetyCheck(target polecatTarget) bool {
 	fmt.Printf("\n  Safety checks:\n")
 	result := checkPolecatSafety(target)
-	polecatInfo, infoErr := target.mgr.Get(target.polecatName)
-	bd := beads.New(target.r.Path)
-	agentBeadID := polecatBeadIDForRig(target.r, target.rigName, target.polecatName)
-	agentIssue, fields, err := bd.GetAgentBead(agentBeadID)
 
-	// Check 1: cleanup status or fallback git state
-	if err != nil || fields == nil {
-		if infoErr == nil && polecatInfo != nil {
-			gitState, gitErr := getGitState(polecatInfo.ClonePath)
-			if gitErr != nil {
-				fmt.Printf("    - Git state: %s\n", style.Warning.Render("cannot check"))
-			} else if gitState.Clean {
-				fmt.Printf("    - Git state: %s\n", style.Success.Render("clean"))
-			} else {
-				fmt.Printf("    - Git state: %s\n", style.Error.Render("dirty"))
-			}
-		} else {
-			fmt.Printf("    - Git state: %s\n", style.Dim.Render("unknown (no polecat info)"))
+	cleanupStatus := result.CleanupStatus
+	switch {
+	case cleanupStatus.IsSafe():
+		fmt.Printf("    - Cleanup status: %s\n", style.Success.Render(string(cleanupStatus)))
+	case cleanupStatus.RequiresRecovery():
+		fmt.Printf("    - Cleanup status: %s\n", style.Error.Render(string(cleanupStatus)))
+	default:
+		statusText := string(cleanupStatus)
+		if statusText == "" {
+			statusText = "<missing>"
 		}
-		fmt.Printf("    - Hook: %s\n", style.Dim.Render("unknown (no agent bead)"))
-	} else {
-		cleanupStatus := polecat.CleanupStatus(fields.CleanupStatus)
-		if cleanupStatus.IsSafe() {
-			fmt.Printf("    - Cleanup status: %s\n", style.Success.Render(string(cleanupStatus)))
-		} else if cleanupStatus.RequiresRecovery() {
-			fmt.Printf("    - Cleanup status: %s\n", style.Error.Render(string(cleanupStatus)))
-		} else {
-			statusText := string(cleanupStatus)
-			if statusText == "" {
-				statusText = "<missing>"
-			}
-			fmt.Printf("    - Cleanup status: %s\n", style.Warning.Render(statusText))
-		}
-
-		hookBead := agentIssue.HookBead
-		if hookBead == "" {
-			hookBead = fields.HookBead
-		}
-		if hookBead != "" {
-			hookedIssue, err := bd.Show(hookBead)
-			if err == nil && hookedIssue != nil && hookedIssue.Status == "closed" {
-				fmt.Printf("    - Hook: %s (%s, closed - stale)\n", style.Warning.Render("stale"), hookBead)
-			} else {
-				fmt.Printf("    - Hook: %s (%s)\n", style.Error.Render("has work"), hookBead)
-			}
-		} else {
-			fmt.Printf("    - Hook: %s\n", style.Success.Render("empty"))
-		}
-
-		if fields.ActiveMR != "" {
-			sourceHint := agentSourceIssueHint("", fields)
-			gitSafe := false
-			if infoErr == nil && polecatInfo != nil {
-				gitSafe = activeMRGitSafeForWorktree(polecatInfo.ClonePath)
-			}
-			if blocker := activeMRBlocker(bd, fields.ActiveMR, sourceHint, true, gitSafe); blocker != "" {
-				fmt.Printf("    - Active MR: %s (%s)\n", style.Error.Render("blocked"), blocker)
-			} else {
-				fmt.Printf("    - Active MR: %s (%s)\n", style.Success.Render("terminal"), fields.ActiveMR)
-			}
-		}
+		fmt.Printf("    - Cleanup status: %s\n", style.Warning.Render(statusText))
 	}
 
-	// Check 2: Open MR
-	if infoErr == nil && polecatInfo != nil && polecatInfo.Branch != "" {
-		mr, mrErr := bd.FindMRForBranch(polecatInfo.Branch)
-		if mrErr == nil && mr != nil {
-			fmt.Printf("    - Open MR: %s (%s)\n", style.Error.Render("yes"), mr.ID)
-		} else {
-			fmt.Printf("    - Open MR: %s\n", style.Success.Render("none"))
+	switch {
+	case result.HookBead == "":
+		fmt.Printf("    - Hook: %s\n", style.Success.Render("empty"))
+	case result.HookStale:
+		fmt.Printf("    - Hook: %s (%s, closed - stale)\n", style.Warning.Render("stale"), result.HookBead)
+	default:
+		fmt.Printf("    - Hook: %s (%s)\n", style.Error.Render("has work"), result.HookBead)
+	}
+
+	if result.ActiveMR != "" {
+		fmt.Printf("    - Active MR: %s\n", result.ActiveMR)
+	}
+	if result.OpenMR != "" {
+		fmt.Printf("    - Open MR: %s (%s)\n", style.Error.Render("yes"), result.OpenMR)
+	} else {
+		fmt.Printf("    - Open MR: %s\n", style.Success.Render("none"))
+	}
+
+	if result.Blocked {
+		fmt.Printf("    - Verdict: %s\n", style.Error.Render(result.Verdict))
+		for _, reason := range result.Reasons {
+			fmt.Printf("      - %s\n", reason)
 		}
 	} else {
-		fmt.Printf("    - Open MR: %s\n", style.Dim.Render("unknown (no branch info)"))
+		fmt.Printf("    - Verdict: %s\n", style.Success.Render(result.Verdict))
 	}
 
 	return result.Blocked
