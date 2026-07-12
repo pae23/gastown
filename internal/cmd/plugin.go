@@ -124,6 +124,10 @@ tree. Runtime plugins are a deployment of merged code: sourcing them from whatev
 checkout you happen to be standing in lets a stale worktree silently re-deploy old
 plugins over new ones, and lets merged fixes never reach ~/gt/plugins at all.
 
+When a remote pushes somewhere other than it fetches (origin fetches upstream but
+pushes to the fork the refinery merges into), the ref is read from the PUSH remote
+-- that is where merged code lands. The source line names it.
+
 Syncs to town-level plugins (~/gt/plugins/) so all rigs see the latest plugins.
 
 Examples:

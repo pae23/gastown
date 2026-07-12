@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -119,6 +120,132 @@ func TestExportPluginsFromRef_FetchFailureIsNotSilent(t *testing.T) {
 
 	if _, err := ExportPluginsFromRef(repo, "origin/main", true); err == nil {
 		t.Error("expected an error when the fetch fails, got nil")
+	}
+}
+
+// newTriangularClone clones fetchRepo and points origin's push URL at pushRepo,
+// reproducing the town's remote layout: fetch from upstream, push to the fork
+// the refinery lands merges on.
+func newTriangularClone(t *testing.T, fetchRepo, pushRepo string) string {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "clone")
+	runGit(t, t.TempDir(), "clone", "--quiet", fetchRepo, clone)
+	runGit(t, clone, "remote", "set-url", "--push", "origin", pushRepo)
+	return clone
+}
+
+// The bug this fix exists for: origin fetches from upstream but pushes to the
+// fork, so refs/remotes/origin/main tracks upstream and lags every merge the
+// refinery lands. Deploying from it ships stale plugins while reporting success.
+func TestExportPluginsFromRef_DeploysFromPushRemote(t *testing.T) {
+	upstream := newRepoWithPlugin(t, "dolt-backup", "stale-upstream")
+	fork := newRepoWithPlugin(t, "dolt-backup", "merged-fix")
+
+	repo := newTriangularClone(t, upstream, fork)
+
+	src, err := ExportPluginsFromRef(repo, "origin/main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	if got := readPlugin(t, src.Dir, "dolt-backup"); got != "merged-fix" {
+		t.Errorf("exported content = %q, want the push remote's %q (deployed the stale fetch remote)", got, "merged-fix")
+	}
+	if src.PushURL != fork {
+		t.Errorf("PushURL = %q, want %q", src.PushURL, fork)
+	}
+	if !strings.Contains(src.Describe(), fork) {
+		t.Errorf("Describe() = %q, want it to name the push remote it deployed from", src.Describe())
+	}
+}
+
+// A fetch must not leave the deploy reading a mirror from a previous run.
+func TestExportPluginsFromRef_PushRemoteMirrorTracksNewMerges(t *testing.T) {
+	upstream := newRepoWithPlugin(t, "dolt-backup", "stale-upstream")
+	fork := newRepoWithPlugin(t, "dolt-backup", "v1")
+
+	repo := newTriangularClone(t, upstream, fork)
+
+	src, err := ExportPluginsFromRef(repo, "origin/main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.Close()
+
+	commitPlugin(t, fork, "dolt-backup", "v2", "land a fix")
+
+	src, err = ExportPluginsFromRef(repo, "origin/main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	if got := readPlugin(t, src.Dir, "dolt-backup"); got != "v2" {
+		t.Errorf("exported content = %q, want the newly merged %q", got, "v2")
+	}
+}
+
+// Without a fetch, the mirror from the last deploy is the best available source
+// -- but it must be the mirror, never the fetch remote's stale tracking ref.
+func TestExportPluginsFromRef_NoFetchUsesMirroredPushRef(t *testing.T) {
+	upstream := newRepoWithPlugin(t, "dolt-backup", "stale-upstream")
+	fork := newRepoWithPlugin(t, "dolt-backup", "merged-fix")
+
+	repo := newTriangularClone(t, upstream, fork)
+
+	// Prime the mirror.
+	src, err := ExportPluginsFromRef(repo, "origin/main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.Close()
+
+	src, err = ExportPluginsFromRef(repo, "origin/main", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	if got := readPlugin(t, src.Dir, "dolt-backup"); got != "merged-fix" {
+		t.Errorf("exported content = %q, want the mirrored %q", got, "merged-fix")
+	}
+}
+
+// No mirror and no fetch means the push remote's state is unknown. Deploying the
+// fetch remote's tracking ref instead would silently ship the stale tree, so the
+// export must fail loudly.
+func TestExportPluginsFromRef_NoFetchWithoutMirrorFails(t *testing.T) {
+	upstream := newRepoWithPlugin(t, "dolt-backup", "stale-upstream")
+	fork := newRepoWithPlugin(t, "dolt-backup", "merged-fix")
+
+	repo := newTriangularClone(t, upstream, fork)
+
+	if _, err := ExportPluginsFromRef(repo, "origin/main", false); err == nil {
+		t.Error("expected an error when no push-remote mirror exists and fetching is disabled, got nil")
+	}
+}
+
+// A plain remote (push URL == fetch URL) keeps deploying from its tracking ref.
+func TestExportPluginsFromRef_SingleRemoteUsesTrackingRef(t *testing.T) {
+	upstream := newRepoWithPlugin(t, "dolt-backup", "v1")
+
+	clone := filepath.Join(t.TempDir(), "clone")
+	runGit(t, t.TempDir(), "clone", "--quiet", upstream, clone)
+
+	commitPlugin(t, upstream, "dolt-backup", "v2", "land a fix")
+
+	src, err := ExportPluginsFromRef(clone, "origin/main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+
+	if got := readPlugin(t, src.Dir, "dolt-backup"); got != "v2" {
+		t.Errorf("exported content = %q, want %q", got, "v2")
+	}
+	if src.PushURL != "" {
+		t.Errorf("PushURL = %q, want empty for a remote with no distinct push URL", src.PushURL)
 	}
 }
 
