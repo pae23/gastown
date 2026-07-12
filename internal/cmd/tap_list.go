@@ -61,6 +61,14 @@ func runTapList(cmd *cobra.Command, args []string) error {
 			matchers:    []string{"Bash(sudo *)", "Bash(apt install*)", "Bash(dnf install*)", "Bash(brew install*)", "Bash(rm -rf /*)", "Bash(git push --force*)", "Bash(git push -f*)"},
 			implemented: true,
 		},
+		{
+			name:        "git-stash",
+			kind:        "guard",
+			description: "Block index-based stash ops on the stack shared by every worktree",
+			event:       "PreToolUse",
+			matchers:    []string{"Bash(git stash*)"},
+			implemented: true,
+		},
 	}
 
 	// Try to load registry for additional handlers
