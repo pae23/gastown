@@ -184,6 +184,33 @@ git add <files>                 # Stage changes
 git commit -m "msg (issue)"     # Commit with issue reference
 ```
 
+### 🚨 NEVER `git stash pop` — The Stash Stack Is Shared
+
+Git keeps the stash stack in the **common** `.git` directory, so **all polecat
+worktrees of this rig share ONE stack**. Another polecat may push an entry
+between your `git stash push` and your `git stash pop` — then `pop` hands you
+*their* work and deletes it from *their* tree. Silent, and it destroys work.
+
+**To prove a test fails without your fix (the common reason to reach for stash),
+use a worktree-local patch file — it touches nothing another agent can see:**
+```bash
+git diff -- <src-paths> > /tmp/fix.patch   # park YOUR fix in YOUR /tmp
+git checkout -- <src-paths>                # source back to HEAD (test file stays)
+<run the test>                             # confirm RED
+git apply /tmp/fix.patch                   # fix back; confirm GREEN
+```
+
+**If you must stash:** label it, and restore by SHA — never by position.
+```bash
+git stash push -m "polecat/<name> <issue> <what>"   # labelled: traceable to you
+git stash list --format='%H %gs'                    # find YOUR entry's SHA
+git stash apply <sha>                               # index-free, cannot steal
+```
+
+`gt tap guard git-stash` blocks `pop`, `drop`, `clear`, positional `apply`, and
+unlabelled `push` whenever the repo has more than one worktree. If you see that
+block, do not work around it — use the recipe above.
+
 ### Communication
 ```bash
 gt mail inbox                   # Check for messages

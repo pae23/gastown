@@ -1059,6 +1059,13 @@ func DefaultBase() *HooksConfig {
 					Command: gtCommand("gt tap guard dangerous-command"),
 				}},
 			},
+			{
+				Matcher: "Bash(git stash*)",
+				Hooks: []Hook{{
+					Type:    "command",
+					Command: gtCommand("gt tap guard git-stash"),
+				}},
+			},
 		},
 		SessionStart: []HookEntry{
 			{
